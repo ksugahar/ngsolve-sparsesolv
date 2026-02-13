@@ -12,6 +12,7 @@
 
 #include "../core/sparse_matrix_view.hpp"
 #include "../core/solver_config.hpp"
+#include "../core/constants.hpp"
 #include <vector>
 #include <cmath>
 #include <algorithm>
@@ -67,7 +68,7 @@ public:
         std::vector<Scalar> inv_D(size);   // inv_D[i] = sqrt(A[i,i])
         for (index_t i = 0; i < size; ++i) {
             Scalar aii = A.diagonal(i);
-            if (std::abs(aii) > 1e-15) {
+            if (std::abs(aii) > constants::MIN_DIAGONAL_TOLERANCE) {
                 D[i] = Scalar(1) / std::sqrt(std::abs(aii));
                 inv_D[i] = std::sqrt(std::abs(aii));
             } else {
@@ -153,7 +154,7 @@ public:
 
         // Compute norm of b2
         double norm_b = compute_norm(b2.data(), size);
-        if (norm_b < 1e-30) {
+        if (norm_b < constants::BREAKDOWN_THRESHOLD) {
             norm_b = 1.0;
         }
 
@@ -223,8 +224,8 @@ public:
                 Scalar denom = nu * Ar_Ar - Ar_y * Ar_y;
 
                 // Regularize if denominator is too small (numerical stability)
-                if (std::abs(denom) < 1e-60) {
-                    denom = (std::real(denom) >= 0 ? Scalar(1e-60) : Scalar(-1e-60));
+                if (std::abs(denom) < constants::DENOMINATOR_BREAKDOWN) {
+                    denom = (std::real(denom) >= 0 ? Scalar(constants::DENOMINATOR_BREAKDOWN) : Scalar(-constants::DENOMINATOR_BREAKDOWN));
                 }
 
                 Scalar inv_denom = Scalar(1) / denom;
