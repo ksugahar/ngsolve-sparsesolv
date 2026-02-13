@@ -61,6 +61,13 @@ def sync_headers(ngsolve_dir: Path, dry_run: bool = False):
             dst_precond.write_text(content, encoding="utf-8")
             print(f"  [WRITE] {dst_precond}")
 
+    # 3b. Sync sparsesolv_python_export.hpp (Python bindings header)
+    #     No include path adjustment needed (includes sparsesolv_precond.hpp
+    #     which is at the same directory level in both source and destination)
+    src_export = INCLUDE_DIR / "ngsolve" / "sparsesolv_python_export.hpp"
+    dst_export = linalg_dir / "sparsesolv_python_export.hpp"
+    _copy_file(src_export, dst_export, dry_run)
+
     # 4. Sync test file
     src_test = SPARSESOLV_ROOT / "tests" / "test_sparsesolv.py"
     dst_test = ngsolve_dir / "tests" / "pytest" / "test_sparsesolv.py"

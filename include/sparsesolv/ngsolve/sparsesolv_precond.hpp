@@ -586,6 +586,21 @@ public:
     void SetAutoShift(bool enable) { config_.auto_shift = enable; }
     bool GetDiagonalScaling() const { return config_.diagonal_scaling; }
     void SetDiagonalScaling(bool enable) { config_.diagonal_scaling = enable; }
+
+    // Divergence detection
+    bool GetDivergenceCheck() const {
+        return config_.divergence_check == sparsesolv::DivergenceCheck::StagnationCount;
+    }
+    void SetDivergenceCheck(bool enable) {
+        config_.divergence_check = enable
+            ? sparsesolv::DivergenceCheck::StagnationCount
+            : sparsesolv::DivergenceCheck::None;
+    }
+    double GetDivergenceThreshold() const { return config_.divergence_threshold; }
+    void SetDivergenceThreshold(double threshold) { config_.divergence_threshold = threshold; }
+    int GetDivergenceCount() const { return config_.divergence_count; }
+    void SetDivergenceCount(int count) { config_.divergence_count = count; }
+
     const SparseSolvResult& GetLastResult() const { return last_result_; }
 
 private:
