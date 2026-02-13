@@ -1,24 +1,20 @@
-﻿################################################################################
-# この .gitignore ファイルは Microsoft(R) Visual Studio によって自動的に作成されました。
-################################################################################
-
-/.vs
-/out/build/x64-Debug
-/SparseSolv/out/build/x64-Debug
-/SparseSolv/.vs
-/SparseSolvPy/.vs
-/SparseSolvPy/out/build/x64-Debug
-/examples/VoxelFEM/out/build/x64-Debug
-/examples/VoxelFEM/.vs
-
 # Build directories
 /build/
 /build_*/
-build_ngsolve/
 
-# Temporary CMake files
-CMakeLists_*.txt
+# IDE
+/.vs/
+*.user
+.vscode/
 
-# MATLAB MEX build artifacts
+# Compiled objects
 *.obj
 *.o
+*.so
+*.dll
+*.pyd
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
