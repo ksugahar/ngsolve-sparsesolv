@@ -457,5 +457,186 @@ def test_factory_returns_typed_class_complex(poisson_2d_complex):
     assert type(solver).__name__ == "SparseSolvSolverC"
 
 
+# ============================================================================
+# Complex eddy current tests (complex-symmetric systems)
+# ============================================================================
+
+@pytest.fixture
+def eddy_current_3d():
+    """3D eddy current problem: curl-curl + i*omega*sigma mass (complex-symmetric)."""
+    from netgen.occ import Box, Pnt, OCCGeometry
+
+    box = Box(Pnt(0, 0, 0), Pnt(1, 1, 1))
+    for face in box.faces:
+        face.name = "outer"
+    mesh = Mesh(OCCGeometry(box).GenerateMesh(maxh=0.3))
+
+    fes = HCurl(mesh, order=1, complex=True, dirichlet="outer", nograds=True)
+    u, v = fes.TnT()
+
+    # curl-curl + i*sigma mass: A^T = A (complex-symmetric, NOT Hermitian)
+    a = BilinearForm(fes)
+    a += InnerProduct(curl(u), curl(v)) * dx
+    a += 1j * InnerProduct(u, v) * dx
+    a.Assemble()
+
+    f_form = LinearForm(fes)
+    f_form += InnerProduct(CF((1, 0, 0)), v) * dx
+    f_form.Assemble()
+
+    return mesh, fes, a, f_form
+
+
+@pytest.mark.parametrize("method", ["ICCG", "ICMRTR", "SGSMRTR"])
+def test_complex_eddy_current(eddy_current_3d, method):
+    """All solver methods converge on complex eddy current (complex-symmetric)."""
+    mesh, fes, a, f = eddy_current_3d
+
+    solver = SparseSolvSolver(a.mat, method=method,
+                               freedofs=fes.FreeDofs(),
+                               tol=1e-8, maxiter=5000,
+                               save_best_result=True)
+
+    gfu = GridFunction(fes)
+    gfu.vec.data = solver * f.vec
+
+    result = solver.last_result
+    print(f"{method} eddy current: iterations={result.iterations}, "
+          f"residual={result.final_residual:.2e}")
+    assert result.converged
+    assert result.iterations < 200
+
+
+def test_complex_eddy_current_vs_direct(eddy_current_3d):
+    """ICCG matches direct solver on complex eddy current."""
+    mesh, fes, a, f = eddy_current_3d
+
+    gfu_direct = GridFunction(fes)
+    gfu_direct.vec.data = a.mat.Inverse(fes.FreeDofs(), inverse="sparsecholesky") * f.vec
+
+    solver = SparseSolvSolver(a.mat, method="ICCG",
+                               freedofs=fes.FreeDofs(),
+                               tol=1e-10, maxiter=5000,
+                               save_best_result=True)
+    gfu_iccg = GridFunction(fes)
+    gfu_iccg.vec.data = solver * f.vec
+
+    diff = gfu_iccg.vec.CreateVector()
+    diff.data = gfu_iccg.vec - gfu_direct.vec
+    rel_err = Norm(diff) / Norm(gfu_direct.vec)
+    print(f"Complex ICCG vs direct: relative error={rel_err:.2e}")
+    assert rel_err < 1e-4
+
+
+# ============================================================================
+# BDDC comparison tests
+# ============================================================================
+
+def test_sparsesolv_vs_bddc_3d_poisson():
+    """SparseSolv ICCG achieves similar accuracy as BDDC+CG on 3D Poisson."""
+    from netgen.occ import Box, Pnt, OCCGeometry
+
+    box = Box(Pnt(0, 0, 0), Pnt(1, 1, 1))
+    for face in box.faces:
+        face.name = "outer"
+    mesh = Mesh(OCCGeometry(box).GenerateMesh(maxh=0.3))
+
+    fes = H1(mesh, order=2, dirichlet="outer")
+    u, v = fes.TnT()
+
+    a = BilinearForm(fes)
+    a += grad(u) * grad(v) * dx
+    a.Assemble()
+
+    f = LinearForm(fes)
+    f += 1 * v * dx
+    f.Assemble()
+
+    # Direct solver reference
+    gfu_direct = GridFunction(fes)
+    gfu_direct.vec.data = a.mat.Inverse(fes.FreeDofs(), inverse="sparsecholesky") * f.vec
+
+    # SparseSolv ICCG
+    solver = SparseSolvSolver(a.mat, method="ICCG",
+                               freedofs=fes.FreeDofs(),
+                               tol=1e-10, maxiter=5000)
+    gfu_iccg = GridFunction(fes)
+    gfu_iccg.vec.data = solver * f.vec
+    iccg_result = solver.last_result
+
+    # BDDC+CG
+    a_bddc = BilinearForm(fes)
+    a_bddc += grad(u) * grad(v) * dx
+    c_bddc = Preconditioner(a_bddc, type="bddc")
+    a_bddc.Assemble()
+
+    gfu_bddc = GridFunction(fes)
+    inv_bddc = CGSolver(a_bddc.mat, c_bddc.mat, printrates=False,
+                         tol=1e-10, maxiter=200)
+    gfu_bddc.vec.data = inv_bddc * f.vec
+
+    # Both should match direct solver
+    diff_iccg = gfu_iccg.vec.CreateVector()
+    diff_iccg.data = gfu_iccg.vec - gfu_direct.vec
+    err_iccg = Norm(diff_iccg) / Norm(gfu_direct.vec)
+
+    diff_bddc = gfu_bddc.vec.CreateVector()
+    diff_bddc.data = gfu_bddc.vec - gfu_direct.vec
+    err_bddc = Norm(diff_bddc) / Norm(gfu_direct.vec)
+
+    print(f"ICCG: iters={iccg_result.iterations}, rel_err={err_iccg:.2e}")
+    print(f"BDDC: rel_err={err_bddc:.2e}")
+    assert iccg_result.converged
+    assert err_iccg < 1e-6
+    assert err_bddc < 1e-6
+
+
+def test_sparsesolv_vs_bddc_eddy_current(eddy_current_3d):
+    """SparseSolv ICCG achieves similar accuracy as BDDC+CG on eddy current."""
+    mesh, fes, a, f = eddy_current_3d
+
+    u, v = fes.TnT()
+
+    # Direct solver reference
+    gfu_direct = GridFunction(fes)
+    gfu_direct.vec.data = a.mat.Inverse(fes.FreeDofs(), inverse="sparsecholesky") * f.vec
+
+    # SparseSolv ICCG
+    solver = SparseSolvSolver(a.mat, method="ICCG",
+                               freedofs=fes.FreeDofs(),
+                               tol=1e-10, maxiter=5000,
+                               save_best_result=True)
+    gfu_iccg = GridFunction(fes)
+    gfu_iccg.vec.data = solver * f.vec
+    iccg_result = solver.last_result
+
+    # BDDC+CG (conjugate=False for complex-symmetric)
+    a_bddc = BilinearForm(fes)
+    a_bddc += InnerProduct(curl(u), curl(v)) * dx
+    a_bddc += 1j * InnerProduct(u, v) * dx
+    c_bddc = Preconditioner(a_bddc, type="bddc")
+    a_bddc.Assemble()
+
+    gfu_bddc = GridFunction(fes)
+    inv_bddc = CGSolver(a_bddc.mat, c_bddc.mat, printrates=False,
+                         conjugate=False, tol=1e-10, maxiter=200)
+    gfu_bddc.vec.data = inv_bddc * f.vec
+
+    # Both should match direct solver
+    diff_iccg = gfu_iccg.vec.CreateVector()
+    diff_iccg.data = gfu_iccg.vec - gfu_direct.vec
+    err_iccg = Norm(diff_iccg) / Norm(gfu_direct.vec)
+
+    diff_bddc = gfu_bddc.vec.CreateVector()
+    diff_bddc.data = gfu_bddc.vec - gfu_direct.vec
+    err_bddc = Norm(diff_bddc) / Norm(gfu_direct.vec)
+
+    print(f"ICCG: iters={iccg_result.iterations}, rel_err={err_iccg:.2e}")
+    print(f"BDDC: rel_err={err_bddc:.2e}")
+    assert iccg_result.converged
+    assert err_iccg < 1e-4
+    assert err_bddc < 1e-4
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
