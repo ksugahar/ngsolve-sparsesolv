@@ -270,22 +270,17 @@ protected:
     /**
      * @brief Compute dot product of two vectors
      *
-     * For real types: standard dot product with parallel reduction
-     * For complex types: conjugate of first argument (Hermitian inner product)
-     *   Parallel when using TaskManager, serial with OpenMP (MSVC limitation)
+     * Uses unconjugated dot product (a^T * b) for both real and complex types.
+     * This is correct for complex-symmetric systems (A^T = A) arising from
+     * FEM discretizations (e.g., eddy current problems).
+     *
+     * Note: For Hermitian systems (A^H = A), the conjugated inner product
+     * (a^H * b) would be needed, but FEM matrices are typically complex-symmetric.
      */
     static Scalar dot_product(const Scalar* a, const Scalar* b, index_t size) {
-        if constexpr (std::is_same_v<Scalar, complex_t>) {
-            // Complex: use parallel_reduce_sum (TaskManager supports complex,
-            // OpenMP/serial fallback is handled inside parallel_reduce_sum)
-            return parallel_reduce_sum<Scalar>(size, [a, b](index_t i) {
-                return std::conj(a[i]) * b[i];
-            });
-        } else {
-            return parallel_reduce_sum<Scalar>(size, [a, b](index_t i) {
-                return a[i] * b[i];
-            });
-        }
+        return parallel_reduce_sum<Scalar>(size, [a, b](index_t i) {
+            return a[i] * b[i];
+        });
     }
 
     // Configuration
