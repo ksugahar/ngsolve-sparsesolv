@@ -90,10 +90,19 @@ After integration, the following are available in `ngsolve.la`:
 
 ```python
 from ngsolve.la import (
-    ICPreconditioner,      # Incomplete Cholesky preconditioner
-    SGSPreconditioner,     # Symmetric Gauss-Seidel preconditioner
-    ILUPreconditioner,     # Incomplete LU preconditioner
-    SparseSolvSolver,      # Unified iterative solver
-    SparseSolvResult,      # Solve result (converged, iterations, residual)
+    # Real (double) versions
+    ICPreconditioner,              # Incomplete Cholesky preconditioner
+    SGSPreconditioner,             # Symmetric Gauss-Seidel preconditioner
+    ILUPreconditioner,             # Incomplete LU preconditioner
+    SparseSolvSolver,              # Unified iterative solver
+
+    # Complex versions
+    ComplexICPreconditioner,       # IC preconditioner for complex matrices
+    ComplexSGSPreconditioner,      # SGS preconditioner for complex matrices
+    ComplexILUPreconditioner,      # ILU preconditioner for complex matrices
+    ComplexSparseSolvSolver,       # Iterative solver for complex systems
+
+    # Result type (shared by real and complex)
+    SparseSolvResult,              # Solve result (converged, iterations, residual)
 )
 ```

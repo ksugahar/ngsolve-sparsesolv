@@ -405,7 +405,259 @@ SparseSolvResult
         "Result from the last Solve() or Mult() call");
 
   // ==========================================================================
-  // TODO: Complex versions (SparseSolvSolver<Complex>, etc.)
-  // Template instantiation for Complex should be added when needed.
-  // The C++ templates already support complex<double>.
+  // SparseSolv Preconditioners (Complex)
   // ==========================================================================
+
+  py::class_<SparseSolvICPreconditioner<Complex>,
+             shared_ptr<SparseSolvICPreconditioner<Complex>>,
+             BaseMatrix>(m, "ComplexICPreconditioner",
+    R"raw_string(
+Incomplete Cholesky (IC) Preconditioner for complex-valued matrices.
+
+Based on SparseSolv library by JP-MARs.
+
+Complex version of ICPreconditioner. Suitable for Hermitian positive definite
+matrices from eddy current or electromagnetic problems.
+
+Parameters:
+
+mat : ngsolve.la.SparseMatrix
+  Complex sparse matrix to precondition
+
+freedofs : ngsolve.BitArray, optional
+  BitArray indicating free DOFs. Constrained DOFs are treated as identity.
+
+shift : float
+  Shift parameter for IC decomposition (default: 1.05).
+
+)raw_string")
+    .def(py::init([](py::object mat, py::object freedofs, double shift) {
+      auto sp_mat = py::cast<shared_ptr<SparseMatrix<Complex>>>(mat);
+      shared_ptr<BitArray> sp_freedofs = nullptr;
+      if (!freedofs.is_none()) {
+        sp_freedofs = py::cast<shared_ptr<BitArray>>(freedofs);
+      }
+      return make_shared<SparseSolvICPreconditioner<Complex>>(sp_mat, sp_freedofs, shift);
+    }), py::arg("mat"), py::arg("freedofs") = py::none(), py::arg("shift") = 1.05,
+        "Create complex IC preconditioner from SparseMatrix")
+    .def("Update", &SparseSolvICPreconditioner<Complex>::Update,
+        "Update preconditioner (recompute factorization after matrix change)")
+    .def_property("shift",
+        &SparseSolvICPreconditioner<Complex>::GetShift,
+        &SparseSolvICPreconditioner<Complex>::SetShift,
+        "Shift parameter for IC decomposition");
+
+  py::class_<SparseSolvSGSPreconditioner<Complex>,
+             shared_ptr<SparseSolvSGSPreconditioner<Complex>>,
+             BaseMatrix>(m, "ComplexSGSPreconditioner",
+    R"raw_string(
+Symmetric Gauss-Seidel (SGS) Preconditioner for complex-valued matrices.
+
+Based on SparseSolv library by JP-MARs.
+
+Complex version of SGSPreconditioner.
+
+Parameters:
+
+mat : ngsolve.la.SparseMatrix
+  Complex sparse matrix to precondition
+
+freedofs : ngsolve.BitArray, optional
+  BitArray indicating free DOFs. Constrained DOFs are treated as identity.
+
+)raw_string")
+    .def(py::init([](py::object mat, py::object freedofs) {
+      auto sp_mat = py::cast<shared_ptr<SparseMatrix<Complex>>>(mat);
+      shared_ptr<BitArray> sp_freedofs = nullptr;
+      if (!freedofs.is_none()) {
+        sp_freedofs = py::cast<shared_ptr<BitArray>>(freedofs);
+      }
+      return make_shared<SparseSolvSGSPreconditioner<Complex>>(sp_mat, sp_freedofs);
+    }), py::arg("mat"), py::arg("freedofs") = py::none(),
+        "Create complex SGS preconditioner from SparseMatrix")
+    .def("Update", &SparseSolvSGSPreconditioner<Complex>::Update,
+        "Update preconditioner (recompute after matrix change)");
+
+  py::class_<SparseSolvILUPreconditioner<Complex>,
+             shared_ptr<SparseSolvILUPreconditioner<Complex>>,
+             BaseMatrix>(m, "ComplexILUPreconditioner",
+    R"raw_string(
+Incomplete LU (ILU) Preconditioner for complex-valued matrices.
+
+Based on SparseSolv library by JP-MARs.
+
+Complex version of ILUPreconditioner. Suitable for general (non-Hermitian)
+complex matrices from electromagnetic problems.
+
+Parameters:
+
+mat : ngsolve.la.SparseMatrix
+  Complex sparse matrix to precondition
+
+freedofs : ngsolve.BitArray, optional
+  BitArray indicating free DOFs. Constrained DOFs are treated as identity.
+
+shift : float
+  Shift parameter for ILU decomposition (default: 1.05).
+
+)raw_string")
+    .def(py::init([](py::object mat, py::object freedofs, double shift) {
+      auto sp_mat = py::cast<shared_ptr<SparseMatrix<Complex>>>(mat);
+      shared_ptr<BitArray> sp_freedofs = nullptr;
+      if (!freedofs.is_none()) {
+        sp_freedofs = py::cast<shared_ptr<BitArray>>(freedofs);
+      }
+      return make_shared<SparseSolvILUPreconditioner<Complex>>(sp_mat, sp_freedofs, shift);
+    }), py::arg("mat"), py::arg("freedofs") = py::none(), py::arg("shift") = 1.05,
+        "Create complex ILU preconditioner from SparseMatrix")
+    .def("Update", &SparseSolvILUPreconditioner<Complex>::Update,
+        "Update preconditioner (recompute factorization after matrix change)")
+    .def_property("shift",
+        &SparseSolvILUPreconditioner<Complex>::GetShift,
+        &SparseSolvILUPreconditioner<Complex>::SetShift,
+        "Shift parameter for ILU decomposition");
+
+  // ==========================================================================
+  // SparseSolv Iterative Solver (Complex)
+  // ==========================================================================
+
+  py::class_<SparseSolvSolver<Complex>,
+             shared_ptr<SparseSolvSolver<Complex>>,
+             BaseMatrix>(m, "ComplexSparseSolvSolver",
+    R"raw_string(
+Iterative solver for complex-valued systems using the SparseSolv library.
+
+Complex version of SparseSolvSolver. Suitable for electromagnetic problems
+such as eddy current analysis, frequency-domain Maxwell's equations, etc.
+
+Supports the same solver methods as SparseSolvSolver:
+- ICCG, ICMRTR, SGSMRTR, CG, MRTR
+
+Example usage:
+
+.. code-block:: python
+
+    from ngsolve import *
+
+    fes = HCurl(mesh, order=2, complex=True)
+    u, v = fes.TnT()
+    a = BilinearForm(fes)
+    a += curl(u)*curl(v)*dx + 1j*sigma*u*v*dx
+    a.Assemble()
+
+    solver = ComplexSparseSolvSolver(a.mat, method="ICCG",
+                                     freedofs=fes.FreeDofs(), tol=1e-10)
+    gfu.vec.data = solver * f.vec
+
+Parameters:
+
+mat : ngsolve.la.SparseMatrix
+  Complex sparse system matrix.
+
+method : str
+  Solver method. One of: "ICCG", "ICMRTR", "SGSMRTR", "CG", "MRTR".
+
+freedofs : ngsolve.BitArray, optional
+  BitArray indicating free DOFs.
+
+tol : float
+  Relative convergence tolerance (default: 1e-10).
+
+maxiter : int
+  Maximum number of iterations (default: 1000).
+
+shift : float
+  Shift parameter for IC preconditioner (default: 1.05).
+
+save_best_result : bool
+  Track best solution during iteration (default: True).
+
+save_residual_history : bool
+  Record residual at each iteration (default: False).
+
+printrates : bool
+  Print convergence information after solve (default: False).
+
+)raw_string")
+    .def(py::init([](py::object mat, const string& method, py::object freedofs,
+                     double tol, int maxiter, double shift,
+                     bool save_best_result, bool save_residual_history,
+                     bool printrates) {
+      auto sp_mat = py::cast<shared_ptr<SparseMatrix<Complex>>>(mat);
+      shared_ptr<BitArray> sp_freedofs = nullptr;
+      if (!freedofs.is_none()) {
+        sp_freedofs = py::cast<shared_ptr<BitArray>>(freedofs);
+      }
+      return make_shared<SparseSolvSolver<Complex>>(
+          sp_mat, method, sp_freedofs, tol, maxiter, shift,
+          save_best_result, save_residual_history, printrates);
+    }),
+        py::arg("mat"),
+        py::arg("method") = "ICCG",
+        py::arg("freedofs") = py::none(),
+        py::arg("tol") = 1e-10,
+        py::arg("maxiter") = 1000,
+        py::arg("shift") = 1.05,
+        py::arg("save_best_result") = true,
+        py::arg("save_residual_history") = false,
+        py::arg("printrates") = false,
+        "Create complex SparseSolv iterative solver")
+    .def("Solve", [](SparseSolvSolver<Complex>& self,
+                     const BaseVector& rhs, BaseVector& sol) {
+      return self.Solve(rhs, sol);
+    }, py::arg("rhs"), py::arg("sol"),
+        R"raw_string(
+Solve the complex linear system Ax = b with initial guess.
+
+Parameters:
+
+rhs : ngsolve.BaseVector
+  Right-hand side vector b (complex).
+
+sol : ngsolve.BaseVector
+  Solution vector x (complex). Used as initial guess on input.
+
+Returns:
+
+SparseSolvResult
+  Result object with convergence info, iteration count, and residual.
+)raw_string")
+    .def_property("method",
+        &SparseSolvSolver<Complex>::GetMethod,
+        &SparseSolvSolver<Complex>::SetMethod,
+        "Solver method: ICCG, ICMRTR, SGSMRTR, CG, MRTR")
+    .def_property("tol",
+        &SparseSolvSolver<Complex>::GetTolerance,
+        &SparseSolvSolver<Complex>::SetTolerance,
+        "Relative convergence tolerance")
+    .def_property("maxiter",
+        &SparseSolvSolver<Complex>::GetMaxIterations,
+        &SparseSolvSolver<Complex>::SetMaxIterations,
+        "Maximum number of iterations")
+    .def_property("shift",
+        &SparseSolvSolver<Complex>::GetShift,
+        &SparseSolvSolver<Complex>::SetShift,
+        "Shift parameter for IC preconditioner")
+    .def_property("save_best_result",
+        &SparseSolvSolver<Complex>::GetSaveBestResult,
+        &SparseSolvSolver<Complex>::SetSaveBestResult,
+        "Track best solution during iteration")
+    .def_property("save_residual_history",
+        &SparseSolvSolver<Complex>::GetSaveResidualHistory,
+        &SparseSolvSolver<Complex>::SetSaveResidualHistory,
+        "Record residual at each iteration")
+    .def_property("printrates",
+        &SparseSolvSolver<Complex>::GetPrintRates,
+        &SparseSolvSolver<Complex>::SetPrintRates,
+        "Print convergence information after solve")
+    .def_property("auto_shift",
+        &SparseSolvSolver<Complex>::GetAutoShift,
+        &SparseSolvSolver<Complex>::SetAutoShift,
+        "Enable automatic shift adjustment for IC decomposition")
+    .def_property("diagonal_scaling",
+        &SparseSolvSolver<Complex>::GetDiagonalScaling,
+        &SparseSolvSolver<Complex>::SetDiagonalScaling,
+        "Enable diagonal scaling for IC preconditioner")
+    .def_property_readonly("last_result",
+        &SparseSolvSolver<Complex>::GetLastResult,
+        "Result from the last Solve() or Mult() call");

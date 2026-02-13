@@ -80,11 +80,19 @@ gfu.vec.data = solver * f.vec
 
 ```python
 from ngsolve.la import (
-    ICPreconditioner,      # Use with NGSolve's CGSolver
-    SGSPreconditioner,     # Use with NGSolve's CGSolver
-    ILUPreconditioner,     # Use with NGSolve's GMRESSolver
-    SparseSolvSolver,      # Standalone solver (ICCG, ICMRTR, SGSMRTR)
-    SparseSolvResult,      # Solve result object
+    # Real (double)
+    ICPreconditioner,              # Use with NGSolve's CGSolver
+    SGSPreconditioner,             # Use with NGSolve's CGSolver
+    ILUPreconditioner,             # Use with NGSolve's GMRESSolver
+    SparseSolvSolver,              # Standalone solver (ICCG, ICMRTR, SGSMRTR)
+
+    # Complex
+    ComplexICPreconditioner,       # IC for complex matrices
+    ComplexSGSPreconditioner,      # SGS for complex matrices
+    ComplexILUPreconditioner,      # ILU for complex matrices
+    ComplexSparseSolvSolver,       # Solver for complex systems
+
+    SparseSolvResult,              # Solve result object
 )
 ```
 
