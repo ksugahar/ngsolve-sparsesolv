@@ -18,8 +18,12 @@
 #ifndef NGSOLVE_SPARSESOLV_PYTHON_EXPORT_HPP
 #define NGSOLVE_SPARSESOLV_PYTHON_EXPORT_HPP
 
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 #include "sparsesolv_precond.hpp"
 #include <type_traits>
+
+namespace py = pybind11;
 
 namespace ngla {
 
@@ -111,28 +115,6 @@ void ExportSparseSolvTyped(py::module& m, const std::string& suffix) {
           "Update preconditioner (recompute after matrix change)");
   }
 
-  // ILU Preconditioner (ILUPreconditionerD / ILUPreconditionerC)
-  {
-    std::string cls_name = "ILUPreconditioner" + suffix;
-    py::class_<SparseSolvILUPreconditioner<SCAL>,
-               shared_ptr<SparseSolvILUPreconditioner<SCAL>>,
-               BaseMatrix>(m, cls_name.c_str(),
-               "Incomplete LU preconditioner (typed). Use ILUPreconditioner() factory instead.")
-      .def(py::init([](shared_ptr<SparseMatrix<SCAL>> mat,
-                       py::object freedofs, double shift) {
-        shared_ptr<BitArray> sp_freedofs = nullptr;
-        if (!freedofs.is_none())
-          sp_freedofs = py::cast<shared_ptr<BitArray>>(freedofs);
-        return make_shared<SparseSolvILUPreconditioner<SCAL>>(mat, sp_freedofs, shift);
-      }), py::arg("mat"), py::arg("freedofs") = py::none(), py::arg("shift") = 1.05)
-      .def("Update", &SparseSolvILUPreconditioner<SCAL>::Update,
-          "Update preconditioner (recompute factorization after matrix change)")
-      .def_property("shift",
-          &SparseSolvILUPreconditioner<SCAL>::GetShift,
-          &SparseSolvILUPreconditioner<SCAL>::SetShift,
-          "Shift parameter for ILU decomposition");
-  }
-
   // SparseSolv Solver (SparseSolvSolverD / SparseSolvSolverC)
   {
     std::string cls_name = "SparseSolvSolver" + suffix;
@@ -169,7 +151,7 @@ void ExportSparseSolvTyped(py::module& m, const std::string& suffix) {
       .def_property("method",
           &SparseSolvSolver<SCAL>::GetMethod,
           &SparseSolvSolver<SCAL>::SetMethod,
-          "Solver method: ICCG, ICMRTR, SGSMRTR, CG, MRTR")
+          "Solver method: ICCG, SGSMRTR, CG")
       .def_property("tol",
           &SparseSolvSolver<SCAL>::GetTolerance,
           &SparseSolvSolver<SCAL>::SetTolerance,
@@ -348,67 +330,6 @@ freedofs : ngsolve.BitArray, optional
 
 )raw_string");
 
-  // ---- ILUPreconditioner factory ----
-  m.def("ILUPreconditioner", [](shared_ptr<BaseMatrix> mat,
-                                  py::object freedofs, double shift) {
-    auto sp_freedofs = ExtractFreeDofs(freedofs);
-    shared_ptr<BaseMatrix> result;
-    if (mat->IsComplex()) {
-      auto sp = dynamic_pointer_cast<SparseMatrix<Complex>>(mat);
-      if (!sp) throw py::type_error("ILUPreconditioner: expected SparseMatrix");
-      auto p = make_shared<SparseSolvILUPreconditioner<Complex>>(sp, sp_freedofs, shift);
-      p->Update();
-      result = p;
-    } else {
-      auto sp = dynamic_pointer_cast<SparseMatrix<double>>(mat);
-      if (!sp) throw py::type_error("ILUPreconditioner: expected SparseMatrix");
-      auto p = make_shared<SparseSolvILUPreconditioner<double>>(sp, sp_freedofs, shift);
-      p->Update();
-      result = p;
-    }
-    return result;
-  },
-  py::arg("mat"), py::arg("freedofs") = py::none(), py::arg("shift") = 1.05,
-  R"raw_string(
-Incomplete LU (ILU) Preconditioner.
-
-Based on SparseSolv library by JP-MARs. Automatically detects real/complex
-from the matrix type.
-
-Suitable for general (non-symmetric) matrices. For symmetric positive definite
-matrices, ICPreconditioner is more efficient.
-
-Example usage:
-
-.. code-block:: python
-
-    from ngsolve import *
-    from ngsolve.krylovspace import GMRESSolver
-
-    fes = H1(mesh, order=2, dirichlet="left|right|top|bottom")
-    u, v = fes.TnT()
-    a = BilinearForm(fes)
-    a += grad(u)*grad(v)*dx + u*v*dx
-    a.Assemble()
-
-    pre = ILUPreconditioner(a.mat, freedofs=fes.FreeDofs(), shift=1.1)
-    inv = GMRESSolver(a.mat, pre, printrates=True, tol=1e-10)
-    gfu.vec.data = inv * f.vec
-
-Parameters:
-
-mat : ngsolve.la.SparseMatrix
-  The sparse matrix to precondition.
-  Real or complex; type is auto-detected.
-
-freedofs : ngsolve.BitArray, optional
-  BitArray indicating free DOFs. Constrained DOFs are treated as identity.
-
-shift : float
-  Shift parameter for ILU decomposition (default: 1.05).
-
-)raw_string");
-
   // ---- SparseSolvSolver factory ----
   m.def("SparseSolvSolver", [](shared_ptr<BaseMatrix> mat,
                                  const string& method, py::object freedofs,
@@ -448,10 +369,8 @@ Automatically detects real/complex from the matrix type.
 
 Supports multiple solver methods for symmetric positive definite systems:
 - ICCG: Conjugate Gradient + Incomplete Cholesky preconditioner
-- ICMRTR: MRTR (Modified Residual Tri-diagonal Reduction) + IC preconditioner
 - SGSMRTR: MRTR with built-in Symmetric Gauss-Seidel (split formula)
 - CG: Conjugate Gradient without preconditioner
-- MRTR: MRTR without preconditioner
 
 Key features:
 - save_best_result (default: True): tracks best solution during iteration.
@@ -496,11 +415,11 @@ Example usage with Solve() for detailed results:
 Parameters:
 
 mat : ngsolve.la.SparseMatrix
-  The sparse system matrix (must be SPD for CG/MRTR methods).
+  The sparse system matrix (must be SPD on free DOFs).
   Real or complex; type is auto-detected.
 
 method : str
-  Solver method. One of: "ICCG", "ICMRTR", "SGSMRTR", "CG", "MRTR".
+  Solver method. One of: "ICCG", "SGSMRTR", "CG".
 
 freedofs : ngsolve.BitArray, optional
   BitArray indicating free DOFs. Constrained DOFs are treated as identity.

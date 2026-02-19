@@ -27,7 +27,7 @@ namespace sparsesolv {
  *
  * SGS is a good general-purpose preconditioner that:
  * - Requires no additional fill-in
- * - Works well with MRTR (SGS-MRTR)
+ * - Works well with the SGS-MRTR solver
  * - Is symmetric, so can be used with CG
  *
  * @note This class owns a copy of the matrix data, so the original matrix

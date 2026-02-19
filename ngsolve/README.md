@@ -3,7 +3,7 @@
 ## Overview
 
 SparseSolv integrates into NGSolve as a header-only library providing
-IC/ILU/SGS preconditioners and ICCG/ICMRTR/SGSMRTR iterative solvers.
+IC/SGS preconditioners and ICCG/SGSMRTR iterative solvers.
 
 ## File Placement
 
@@ -11,7 +11,7 @@ Copy the following into the NGSolve source tree (`linalg/` directory):
 
 ```
 ngsolve/linalg/
-├── sparsesolv/                              ← from include/sparsesolv/{core,preconditioners,solvers}/ + sparsesolv.hpp
+├── sparsesolv/                              <- from include/sparsesolv/{core,preconditioners,solvers}/ + sparsesolv.hpp
 │   ├── sparsesolv.hpp
 │   ├── core/
 │   │   ├── types.hpp
@@ -20,17 +20,15 @@ ngsolve/linalg/
 │   │   └── preconditioner.hpp
 │   ├── preconditioners/
 │   │   ├── ic_preconditioner.hpp
-│   │   ├── ilu_preconditioner.hpp
 │   │   └── sgs_preconditioner.hpp
 │   └── solvers/
 │       ├── iterative_solver.hpp
 │       ├── cg_solver.hpp
-│       ├── mrtr_solver.hpp
 │       └── sgs_mrtr_solver.hpp
-├── sparsesolv_precond.hpp                   ← from include/sparsesolv/ngsolve/sparsesolv_precond.hpp
-├── la.hpp                                   ← add: #include "sparsesolv_precond.hpp"
-├── python_linalg.cpp                        ← add: SparseSolv bindings (see python_bindings.cpp)
-└── CMakeLists.txt                           ← add: install sparsesolv headers
+├── sparsesolv_precond.hpp                   <- from include/sparsesolv/ngsolve/sparsesolv_precond.hpp
+├── la.hpp                                   <- add: #include "sparsesolv_precond.hpp"
+├── python_linalg.cpp                        <- add: SparseSolv bindings (see python_bindings.cpp)
+└── CMakeLists.txt                           <- add: install sparsesolv headers
 ```
 
 ## CMakeLists.txt Changes
@@ -90,17 +88,10 @@ After integration, the following are available in `ngsolve.la`:
 
 ```python
 from ngsolve.la import (
-    # Real (double) versions
+    # Factory functions (auto-dispatch real/complex based on mat.IsComplex())
     ICPreconditioner,              # Incomplete Cholesky preconditioner
     SGSPreconditioner,             # Symmetric Gauss-Seidel preconditioner
-    ILUPreconditioner,             # Incomplete LU preconditioner
-    SparseSolvSolver,              # Unified iterative solver
-
-    # Complex versions
-    ComplexICPreconditioner,       # IC preconditioner for complex matrices
-    ComplexSGSPreconditioner,      # SGS preconditioner for complex matrices
-    ComplexILUPreconditioner,      # ILU preconditioner for complex matrices
-    ComplexSparseSolvSolver,       # Iterative solver for complex systems
+    SparseSolvSolver,              # Unified iterative solver (ICCG, SGSMRTR)
 
     # Result type (shared by real and complex)
     SparseSolvResult,              # Solve result (converged, iterations, residual)

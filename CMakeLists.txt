@@ -21,7 +21,37 @@ endif()
 # Alias for consistent naming
 add_library(SparseSolv::sparsesolv ALIAS sparsesolv)
 
-# Installation
+# ==============================================================================
+# NGSolve Python extension module (optional)
+# ==============================================================================
+option(SPARSESOLV_BUILD_NGSOLVE "Build NGSolve Python extension module" OFF)
+
+if(SPARSESOLV_BUILD_NGSOLVE)
+    find_package(NGSolve CONFIG REQUIRED
+        HINTS "${NGSOLVE_INSTALL_DIR}"
+    )
+    message(STATUS "Found NGSolve: ${NGSOLVE_INCLUDE_DIRS}")
+
+    add_ngsolve_python_module(sparsesolv_ngsolve ngsolve/python_module.cpp)
+    target_include_directories(sparsesolv_ngsolve PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_compile_features(sparsesolv_ngsolve PRIVATE cxx_std_17)
+
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(sparsesolv_ngsolve PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+
+    # Install the Python module next to NGSolve
+    install(TARGETS sparsesolv_ngsolve
+        LIBRARY DESTINATION ${NGSOLVE_INSTALL_DIR_PYTHON}/sparsesolv_ngsolve
+        RUNTIME DESTINATION ${NGSOLVE_INSTALL_DIR_PYTHON}/sparsesolv_ngsolve
+    )
+endif()
+
+# ==============================================================================
+# Header-only library installation
+# ==============================================================================
 include(GNUInstallDirs)
 install(TARGETS sparsesolv
     EXPORT SparseSolvTargets

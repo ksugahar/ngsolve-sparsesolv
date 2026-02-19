@@ -1,8 +1,8 @@
 """
 Tests for SparseSolv iterative solvers and preconditioners.
 
-Tests SparseSolvSolver (ICCG, ICMRTR, SGSMRTR) and standalone
-preconditioners (IC, ILU, SGS) for use with NGSolve's Krylov solvers.
+Tests SparseSolvSolver (ICCG, SGSMRTR) and standalone
+preconditioners (IC, SGS) for use with NGSolve's Krylov solvers.
 
 Factory functions (ICPreconditioner, etc.) auto-dispatch real/complex
 based on mat.IsComplex() and auto-call Update() on construction.
@@ -12,7 +12,7 @@ import pytest
 from netgen.geom2d import unit_square
 from netgen.csg import unit_cube
 from ngsolve import *
-from ngsolve.la import ICPreconditioner, ILUPreconditioner, SGSPreconditioner
+from ngsolve.la import ICPreconditioner, SGSPreconditioner
 from ngsolve.la import SparseSolvSolver
 from ngsolve.krylovspace import CGSolver
 
@@ -75,7 +75,7 @@ def poisson_3d():
 # SparseSolvSolver tests
 # ============================================================================
 
-@pytest.mark.parametrize("method", ["ICCG", "ICMRTR", "SGSMRTR"])
+@pytest.mark.parametrize("method", ["ICCG", "SGSMRTR"])
 def test_sparsesolv_solver_2d_poisson(poisson_2d, method):
     """All solver methods converge on 2D Poisson."""
     mesh, fes, a, f, gfu_bc, exact = poisson_2d
@@ -141,7 +141,6 @@ def test_sparsesolv_solver_vs_direct(poisson_2d):
 
 @pytest.mark.parametrize("PreClass,kwargs", [
     (ICPreconditioner, {"shift": 1.05}),
-    (ILUPreconditioner, {"shift": 1.05}),
     (SGSPreconditioner, {}),
 ])
 def test_preconditioners_with_ngsolve_cg(poisson_2d, PreClass, kwargs):
@@ -418,7 +417,6 @@ def test_factory_auto_dispatch_complex_solver(poisson_2d_complex):
 
 @pytest.mark.parametrize("Factory,kwargs", [
     (ICPreconditioner, {"shift": 1.05}),
-    (ILUPreconditioner, {"shift": 1.05}),
     (SGSPreconditioner, {}),
 ])
 def test_factory_auto_dispatch_complex_precond(poisson_2d_complex, Factory, kwargs):
@@ -487,7 +485,7 @@ def eddy_current_3d():
     return mesh, fes, a, f_form
 
 
-@pytest.mark.parametrize("method", ["ICCG", "ICMRTR", "SGSMRTR"])
+@pytest.mark.parametrize("method", ["ICCG", "SGSMRTR"])
 def test_complex_eddy_current(eddy_current_3d, method):
     """All solver methods converge on complex eddy current (complex-symmetric)."""
     mesh, fes, a, f = eddy_current_3d

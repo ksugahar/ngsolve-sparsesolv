@@ -2,8 +2,8 @@
  * @file sparsesolv_precond.hpp
  * @brief SparseSolv preconditioners integrated with NGSolve
  *
- * Provides IC (Incomplete Cholesky), ILU (Incomplete LU), and
- * SGS (Symmetric Gauss-Seidel) preconditioners for use with NGSolve's Krylov solvers.
+ * Provides IC (Incomplete Cholesky) and SGS (Symmetric Gauss-Seidel)
+ * preconditioners for use with NGSolve's Krylov solvers.
  *
  * These preconditioners support Dirichlet boundary conditions through
  * the freedofs parameter (BitArray).
@@ -289,55 +289,8 @@ private:
     shared_ptr<sparsesolv::SGSPreconditioner<SCAL>> precond_;
 };
 
-// ============================================================================
-// ILU Preconditioner
-// ============================================================================
-
-/**
- * @brief Incomplete LU Preconditioner for NGSolve
- *
- * Uses shifted ILU decomposition for improved stability.
- * Suitable for general (non-symmetric) matrices.
- * Supports Dirichlet boundary conditions through freedofs parameter.
- *
- * @tparam SCAL Scalar type (double or Complex)
- */
-template<typename SCAL = double>
-class SparseSolvILUPreconditioner : public SparseSolvPrecondBase<SCAL> {
-public:
-    SparseSolvILUPreconditioner(shared_ptr<SparseMatrix<SCAL>> mat,
-                                shared_ptr<BitArray> freedofs = nullptr,
-                                double shift = 1.05)
-        : SparseSolvPrecondBase<SCAL>(mat, freedofs)
-        , shift_(shift)
-        , precond_(std::make_shared<sparsesolv::ILUPreconditioner<SCAL>>(shift))
-    {}
-
-    void Update() {
-        auto view = this->prepare_matrix_view();
-        precond_->setup(view);
-    }
-
-    double GetShift() const { return shift_; }
-
-    void SetShift(double shift) {
-        shift_ = shift;
-        precond_->set_shift_parameter(shift);
-    }
-
-protected:
-    void apply_precond(const SCAL* x, SCAL* y) const override {
-        precond_->apply(x, y, this->height_);
-    }
-
-private:
-    double shift_;
-    shared_ptr<sparsesolv::ILUPreconditioner<SCAL>> precond_;
-};
-
 // Type aliases for convenience
 using ICPreconditioner = SparseSolvICPreconditioner<double>;
-using ILUPreconditioner = SparseSolvILUPreconditioner<double>;
 using SGSPreconditioner = SparseSolvSGSPreconditioner<double>;
 
 // ============================================================================
@@ -363,10 +316,8 @@ struct SparseSolvResult {
  *
  * Supports multiple solver methods:
  * - "ICCG": Conjugate Gradient with Incomplete Cholesky preconditioner
- * - "ICMRTR": MRTR with Incomplete Cholesky preconditioner
  * - "SGSMRTR": MRTR with built-in Symmetric Gauss-Seidel (split formula)
  * - "CG": Conjugate Gradient without preconditioner
- * - "MRTR": MRTR without preconditioner
  *
  * Key features:
  * - save_best_result: tracks best solution during iteration (default: true)
@@ -398,11 +349,11 @@ public:
     /**
      * @brief Construct solver
      * @param mat The sparse matrix (system matrix A)
-     * @param method Solver method: "ICCG", "ICMRTR", "SGSMRTR", "CG", "MRTR"
+     * @param method Solver method: "ICCG", "SGSMRTR", "CG"
      * @param freedofs BitArray indicating free DOFs (nullptr = all free)
      * @param tol Relative tolerance for convergence (default: 1e-10)
      * @param maxiter Maximum number of iterations (default: 1000)
-     * @param shift Shift parameter for IC/ILU preconditioner (default: 1.05)
+     * @param shift Shift parameter for IC preconditioner (default: 1.05)
      * @param save_best_result Save best solution during iteration (default: true)
      * @param save_residual_history Save residual at each iteration (default: false)
      * @param printrates Print convergence information (default: false)
@@ -495,22 +446,16 @@ public:
 
         if (method_ == "ICCG" || method_ == "iccg") {
             result = sparsesolv::solve_iccg(view, b_ptr, x_ptr, height_, config);
-        } else if (method_ == "ICMRTR" || method_ == "icmrtr") {
-            result = sparsesolv::solve_icmrtr(view, b_ptr, x_ptr, height_, config);
         } else if (method_ == "SGSMRTR" || method_ == "sgsmrtr") {
             result = sparsesolv::solve_sgsmrtr(view, b_ptr, x_ptr, height_, config);
         } else if (method_ == "CG" || method_ == "cg") {
             sparsesolv::CGSolver<SCAL> solver;
             solver.set_config(config);
             result = solver.solve(view, b_ptr, x_ptr, height_, nullptr);
-        } else if (method_ == "MRTR" || method_ == "mrtr") {
-            sparsesolv::MRTRSolver<SCAL> solver;
-            solver.set_config(config);
-            result = solver.solve(view, b_ptr, x_ptr, height_, nullptr);
         } else {
             throw std::runtime_error(
                 "SparseSolvSolver: Unknown method '" + method_ +
-                "'. Available: ICCG, ICMRTR, SGSMRTR, CG, MRTR");
+                "'. Available: ICCG, SGSMRTR, CG");
         }
 
         // Copy solution back (only free DOFs)

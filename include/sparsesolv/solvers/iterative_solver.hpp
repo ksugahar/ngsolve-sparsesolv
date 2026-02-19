@@ -21,7 +21,7 @@ namespace sparsesolv {
  * @brief Abstract base class for iterative linear solvers
  *
  * This class provides a common interface for iterative methods such as CG,
- * MRTR, BiCGSTAB, etc. It handles:
+ * SGS-MRTR, etc. It handles:
  * - Configuration management
  * - Convergence checking
  * - Divergence detection

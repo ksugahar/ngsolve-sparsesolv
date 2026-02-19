@@ -7,9 +7,7 @@
  *
  * Features:
  * - Preconditioned Conjugate Gradient (ICCG)
- * - MRTR method (Modified Residual-based Tri-diagonal Reduction)
- * - SGS-MRTR (Symmetric Gauss-Seidel MRTR)
- * - ABMC ordering for parallel IC
+ * - SGS-MRTR (Symmetric Gauss-Seidel MRTR with split formula)
  * - Support for real and complex matrices
  *
  * Example usage:
@@ -56,13 +54,11 @@
 
 // Preconditioners
 #include "preconditioners/ic_preconditioner.hpp"
-#include "preconditioners/ilu_preconditioner.hpp"
 #include "preconditioners/sgs_preconditioner.hpp"
 
 // Solvers
 #include "solvers/iterative_solver.hpp"
 #include "solvers/cg_solver.hpp"
-#include "solvers/mrtr_solver.hpp"
 #include "solvers/sgs_mrtr_solver.hpp"
 
 namespace sparsesolv {
@@ -127,46 +123,6 @@ inline SolverResult solve_iccg(
         x.resize(b.size());
     }
     return solve_iccg(A, b.data(), x.data(), static_cast<index_t>(b.size()), config);
-}
-
-/**
- * @brief Convenience function: Solve Ax=b using IC-MRTR
- */
-template<typename Scalar = double>
-inline SolverResult solve_icmrtr(
-    const SparseMatrixView<Scalar>& A,
-    const Scalar* b,
-    Scalar* x,
-    index_t size,
-    const SolverConfig& config = SolverConfig()
-) {
-    // Create IC preconditioner with full config (for auto-shift, diagonal scaling, etc.)
-    ICPreconditioner<Scalar> precond(config.shift_parameter);
-    precond.set_config(config);
-    precond.setup(A);
-
-    // Create MRTR solver
-    MRTRSolver<Scalar> solver;
-    solver.set_config(config);
-
-    // Solve
-    return solver.solve(A, b, x, size, &precond);
-}
-
-/**
- * @brief Convenience function: Solve Ax=b using IC-MRTR with std::vector
- */
-template<typename Scalar = double>
-inline SolverResult solve_icmrtr(
-    const SparseMatrixView<Scalar>& A,
-    const std::vector<Scalar>& b,
-    std::vector<Scalar>& x,
-    const SolverConfig& config = SolverConfig()
-) {
-    if (x.size() != b.size()) {
-        x.resize(b.size());
-    }
-    return solve_icmrtr(A, b.data(), x.data(), static_cast<index_t>(b.size()), config);
 }
 
 /**
