@@ -27,8 +27,15 @@ add_library(SparseSolv::sparsesolv ALIAS sparsesolv)
 option(SPARSESOLV_BUILD_NGSOLVE "Build NGSolve Python extension module" OFF)
 
 if(SPARSESOLV_BUILD_NGSOLVE)
+    if(NOT NGSOLVE_INSTALL_DIR)
+        execute_process(
+            COMMAND python -c "import ngsolve, pathlib; d = pathlib.Path(ngsolve.__file__).parent.parent; print(d.as_posix() + ';' + (d.parent.parent / 'cmake').as_posix() + ';' + (d / 'cmake').as_posix())"
+            OUTPUT_VARIABLE NGSOLVE_HINTS
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+    endif()
     find_package(NGSolve CONFIG REQUIRED
-        HINTS "${NGSOLVE_INSTALL_DIR}"
+        HINTS ${NGSOLVE_HINTS} "${NGSOLVE_INSTALL_DIR}"
     )
     message(STATUS "Found NGSolve: ${NGSOLVE_INCLUDE_DIRS}")
 
@@ -41,11 +48,22 @@ if(SPARSESOLV_BUILD_NGSOLVE)
     # Use NGSolve TaskManager for parallel_for/parallel_reduce_sum
     target_compile_definitions(sparsesolv_ngsolve PRIVATE SPARSESOLV_USE_NGSOLVE_TASKMANAGER)
 
-    # Install the Python module next to NGSolve
-    install(TARGETS sparsesolv_ngsolve
-        LIBRARY DESTINATION ${NGSOLVE_INSTALL_DIR_PYTHON}/sparsesolv_ngsolve
-        RUNTIME DESTINATION ${NGSOLVE_INSTALL_DIR_PYTHON}/sparsesolv_ngsolve
-    )
+    # Install the Python module
+    if(SKBUILD)
+        # scikit-build-core: wheel-relative install path
+        install(TARGETS sparsesolv_ngsolve
+            LIBRARY DESTINATION sparsesolv_ngsolve
+            RUNTIME DESTINATION sparsesolv_ngsolve)
+        file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/__init__.py"
+             "from .sparsesolv_ngsolve import *\n")
+        install(FILES "${CMAKE_CURRENT_BINARY_DIR}/__init__.py"
+                DESTINATION sparsesolv_ngsolve)
+    else()
+        # Manual build: install next to NGSolve
+        install(TARGETS sparsesolv_ngsolve
+            LIBRARY DESTINATION ${NGSOLVE_INSTALL_DIR_PYTHON}/sparsesolv_ngsolve
+            RUNTIME DESTINATION ${NGSOLVE_INSTALL_DIR_PYTHON}/sparsesolv_ngsolve)
+    endif()
 endif()
 
 # ==============================================================================

@@ -8,10 +8,17 @@ BDDC前処理を中心に、IC分解・SGS-MRTR・CG法を提供する。
 | ドキュメント | 内容 |
 |---|---|
 | [architecture.md](architecture.md) | ソースコード構成とアーキテクチャ |
-| [algorithms.md](algorithms.md) | アルゴリズム解説 (BDDC, IC, SGS-MRTR, CG) |
+| [algorithms.md](algorithms.md) | アルゴリズム解説 (BDDC, IC, SGS-MRTR, CG, ABMC) |
 | [api_reference.md](api_reference.md) | Python APIリファレンス |
-| [tutorials.md](tutorials.md) | 実践チュートリアル (コピペ実行可能) |
 | [development.md](development.md) | ビルド・テスト・開発者向け情報 |
+
+### ベンチマーク・ノートブック
+
+| ノートブック | 内容 |
+|---|---|
+| [01_shift_parameter.ipynb](01_shift_parameter.ipynb) | HCurl curl-curl問題でのシフトパラメータの必要性 |
+| [02_performance_comparison.ipynb](02_performance_comparison.ipynb) | BDDC vs ICCG vs ICCG+ABMC パフォーマンス比較 |
+| [03_sparsesolv_vs_ngsolve_bddc.ipynb](03_sparsesolv_vs_ngsolve_bddc.ipynb) | SparseSolv BDDC ≈ NGSolve BDDC 同等性の実証 |
 
 ## 概要
 

@@ -171,7 +171,7 @@ shared_ptr<BaseMatrix> CreateBDDCFromBilinearForm(
 {
     auto mat = dynamic_pointer_cast<SparseMatrix<SCAL>>(bfa->GetMatrixPtr());
     if (!mat) throw py::type_error("BDDCPreconditioner: matrix type mismatch");
-    auto freedofs = fes->GetFreeDofs(true);  // coupling=true for BDDC
+    auto freedofs = fes->GetFreeDofs(false);  // include LOCAL_DOFs for order >= 3
     auto mesh = fes->GetMeshAccess();
     size_t ndof = fes->GetNDof();
     size_t ne = mesh->GetNE(ngfem::VOL);
