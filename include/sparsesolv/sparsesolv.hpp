@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 /// @file sparsesolv.hpp
 /// @brief Main header — includes all SparseSolv components
 
@@ -26,7 +30,7 @@ namespace sparsesolv {
 
 struct Version {
     static constexpr int major = 2;
-    static constexpr int minor = 0;
+    static constexpr int minor = 1;
     static constexpr int patch = 0;
 
     static std::string string() {
@@ -143,10 +147,7 @@ inline SolverResult solve_sgsmrtr(
     if (x.size() != b.size()) {
         x.resize(b.size());
     }
-    // Use specialized SGS-MRTR solver
-    SGSMRTRSolver<Scalar> solver;
-    solver.set_config(config);
-    return solver.solve(A, b, x);
+    return solve_sgsmrtr(A, b.data(), x.data(), static_cast<index_t>(b.size()), config);
 }
 
 } // namespace sparsesolv

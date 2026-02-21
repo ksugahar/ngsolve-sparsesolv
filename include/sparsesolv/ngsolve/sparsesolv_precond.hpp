@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 /// @file sparsesolv_precond.hpp
 /// @brief SparseSolv preconditioners (IC, SGS, BDDC) as NGSolve BaseMatrix wrappers
 
@@ -20,6 +24,60 @@ const SCAL* GetVectorData(const BaseVector& vec) {
 template<typename SCAL>
 SCAL* GetVectorData(BaseVector& vec) {
     return vec.FV<SCAL>().Data();
+}
+
+// ============================================================================
+// Common: NGSolve SparseMatrix → SparseSolv view conversion
+// ============================================================================
+
+/// Convert NGSolve SparseMatrix to SparseSolv view (identity rows for constrained DOFs)
+template<typename SCAL>
+sparsesolv::SparseMatrixView<SCAL> BuildSparseMatrixView(
+    const SparseMatrix<SCAL>& mat,
+    const BitArray* freedofs,
+    sparsesolv::index_t height, sparsesolv::index_t width,
+    std::vector<sparsesolv::index_t>& row_ptr,
+    std::vector<sparsesolv::index_t>& col_idx,
+    std::vector<SCAL>& modified_values)
+{
+    const auto& firsti = mat.GetFirstArray();
+    const auto& colnr = mat.GetColIndices();
+    const auto& values = mat.GetValues();
+
+    const size_t nrows = firsti.Size();
+    const size_t nnz = colnr.Size();
+
+    row_ptr.resize(nrows);
+    sparsesolv::parallel_for(static_cast<sparsesolv::index_t>(nrows), [&](sparsesolv::index_t i) {
+        row_ptr[i] = static_cast<sparsesolv::index_t>(firsti[i]);
+    });
+
+    col_idx.resize(nnz);
+    sparsesolv::parallel_for(static_cast<sparsesolv::index_t>(nnz), [&](sparsesolv::index_t i) {
+        col_idx[i] = static_cast<sparsesolv::index_t>(colnr[i]);
+    });
+
+    if (freedofs) {
+        modified_values.resize(values.Size());
+        sparsesolv::parallel_for(static_cast<sparsesolv::index_t>(values.Size()), [&](sparsesolv::index_t i) {
+            modified_values[i] = values[i];
+        });
+        sparsesolv::parallel_for(height, [&](sparsesolv::index_t i) {
+            for (sparsesolv::index_t k = row_ptr[i]; k < row_ptr[i + 1]; ++k) {
+                sparsesolv::index_t j = col_idx[k];
+                if (!freedofs->Test(i)) {
+                    modified_values[k] = (j == i) ? SCAL(1) : SCAL(0);
+                } else if (!freedofs->Test(j)) {
+                    modified_values[k] = SCAL(0);
+                }
+            }
+        });
+        return sparsesolv::SparseMatrixView<SCAL>(
+            height, width, row_ptr.data(), col_idx.data(), modified_values.data());
+    } else {
+        return sparsesolv::SparseMatrixView<SCAL>(
+            height, width, row_ptr.data(), col_idx.data(), values.Data());
+    }
 }
 
 // ============================================================================
@@ -48,55 +106,10 @@ protected:
         , width_(static_cast<sparsesolv::index_t>(mat->Width()))
     {}
 
-    /// Convert NGSolve SparseMatrix to SparseSolv view (identity rows for constrained DOFs)
     sparsesolv::SparseMatrixView<SCAL> prepare_matrix_view() {
-        const auto& firsti = mat_->GetFirstArray();
-        const auto& colnr = mat_->GetColIndices();
-        const auto& values = mat_->GetValues();
-
-        const size_t nrows = firsti.Size();
-        const size_t nnz = colnr.Size();
-
-        // Convert row pointers
-        row_ptr_.resize(nrows);
-        sparsesolv::parallel_for(static_cast<sparsesolv::index_t>(nrows), [&](sparsesolv::index_t i) {
-            row_ptr_[i] = static_cast<sparsesolv::index_t>(firsti[i]);
-        });
-
-        // Convert column indices
-        col_idx_.resize(nnz);
-        sparsesolv::parallel_for(static_cast<sparsesolv::index_t>(nnz), [&](sparsesolv::index_t i) {
-            col_idx_[i] = static_cast<sparsesolv::index_t>(colnr[i]);
-        });
-
-        if (freedofs_) {
-            modified_values_.resize(values.Size());
-
-            sparsesolv::parallel_for(static_cast<sparsesolv::index_t>(values.Size()), [&](sparsesolv::index_t i) {
-                modified_values_[i] = values[i];
-            });
-
-            sparsesolv::parallel_for(height_, [&](sparsesolv::index_t i) {
-                for (sparsesolv::index_t k = row_ptr_[i]; k < row_ptr_[i + 1]; ++k) {
-                    sparsesolv::index_t j = col_idx_[k];
-                    if (!freedofs_->Test(i)) {
-                        modified_values_[k] = (j == i) ? SCAL(1) : SCAL(0);
-                    } else if (!freedofs_->Test(j)) {
-                        modified_values_[k] = SCAL(0);
-                    }
-                }
-            });
-
-            return sparsesolv::SparseMatrixView<SCAL>(
-                height_, width_,
-                row_ptr_.data(), col_idx_.data(), modified_values_.data()
-            );
-        } else {
-            return sparsesolv::SparseMatrixView<SCAL>(
-                height_, width_,
-                row_ptr_.data(), col_idx_.data(), values.Data()
-            );
-        }
+        return BuildSparseMatrixView<SCAL>(
+            *mat_, freedofs_.get(), height_, width_,
+            row_ptr_, col_idx_, modified_values_);
     }
 
     /// Apply the underlying SparseSolv preconditioner (implemented by derived classes)
@@ -231,19 +244,18 @@ public:
         , element_matrices_(std::move(element_matrices))
         , coarse_inverse_type_(std::move(coarse_inverse))
         , precond_(std::make_shared<sparsesolv::BDDCPreconditioner<SCAL>>())
-    {}
+    {
+        if (element_matrices_.empty())
+            throw std::runtime_error("BDDCPreconditioner: element_matrices required");
+    }
 
     void Update() {
         auto view = this->prepare_matrix_view();
         precond_->set_element_info(element_dofs_, dof_types_);
-
-        // Pass element matrices for element-by-element mode
-        if (!element_matrices_.empty())
-            precond_->set_element_matrices(element_matrices_);
+        precond_->set_element_matrices(element_matrices_);
 
         // Tell BDDC to skip dense coarse inverse if we'll use NGSolve's solver
-        bool use_ngsolve_coarse = !element_matrices_.empty() &&
-                                   coarse_inverse_type_ != "dense";
+        bool use_ngsolve_coarse = (coarse_inverse_type_ != "dense");
         if (use_ngsolve_coarse)
             precond_->set_use_external_coarse(true);
 
@@ -267,9 +279,6 @@ public:
     }
     sparsesolv::index_t NumInterfaceDofs() const {
         return precond_->num_interface_dofs();
-    }
-    bool IsElementMode() const {
-        return precond_->is_element_mode();
     }
 
     const std::string& GetCoarseInverseType() const { return coarse_inverse_type_; }
@@ -346,14 +355,9 @@ using ICPreconditioner = SparseSolvICPreconditioner<double>;
 using SGSPreconditioner = SparseSolvSGSPreconditioner<double>;
 
 // ============================================================================
-// Solver Result
+// Solver Result (alias for sparsesolv::SolverResult)
 // ============================================================================
-struct SparseSolvResult {
-    bool converged = false;
-    int iterations = 0;
-    double final_residual = 0.0;
-    std::vector<double> residual_history;
-};
+using SparseSolvResult = sparsesolv::SolverResult;
 
 // ============================================================================
 // SparseSolv Iterative Solver
@@ -481,11 +485,7 @@ public:
         }
 
         // Build and store result
-        last_result_.converged = result.converged;
-        last_result_.iterations = result.iterations;
-        last_result_.final_residual = result.final_residual;
-        last_result_.residual_history = std::move(result.residual_history);
-
+        last_result_ = std::move(result);
         return last_result_;
     }
 
@@ -548,53 +548,9 @@ public:
 
 private:
     sparsesolv::SparseMatrixView<SCAL> prepare_matrix() const {
-        const auto& firsti = mat_->GetFirstArray();
-        const auto& colnr = mat_->GetColIndices();
-        const auto& values = mat_->GetValues();
-
-        const size_t nrows = firsti.Size();
-        const size_t nnz = colnr.Size();
-
-        // Convert row pointers
-        row_ptr_.resize(nrows);
-        sparsesolv::parallel_for(static_cast<sparsesolv::index_t>(nrows), [&](sparsesolv::index_t i) {
-            row_ptr_[i] = static_cast<sparsesolv::index_t>(firsti[i]);
-        });
-
-        // Convert column indices
-        col_idx_.resize(nnz);
-        sparsesolv::parallel_for(static_cast<sparsesolv::index_t>(nnz), [&](sparsesolv::index_t i) {
-            col_idx_[i] = static_cast<sparsesolv::index_t>(colnr[i]);
-        });
-
-        if (freedofs_) {
-            modified_values_.resize(values.Size());
-
-            sparsesolv::parallel_for(static_cast<sparsesolv::index_t>(values.Size()), [&](sparsesolv::index_t i) {
-                modified_values_[i] = values[i];
-            });
-
-            sparsesolv::parallel_for(height_, [&](sparsesolv::index_t i) {
-                for (sparsesolv::index_t k = row_ptr_[i]; k < row_ptr_[i + 1]; ++k) {
-                    sparsesolv::index_t j = col_idx_[k];
-                    if (!freedofs_->Test(i)) {
-                        modified_values_[k] = (j == i) ? SCAL(1) : SCAL(0);
-                    } else if (!freedofs_->Test(j)) {
-                        modified_values_[k] = SCAL(0);
-                    }
-                }
-            });
-
-            return sparsesolv::SparseMatrixView<SCAL>(
-                height_, width_,
-                row_ptr_.data(), col_idx_.data(), modified_values_.data()
-            );
-        } else {
-            return sparsesolv::SparseMatrixView<SCAL>(
-                height_, width_,
-                row_ptr_.data(), col_idx_.data(), values.Data()
-            );
-        }
+        return BuildSparseMatrixView<SCAL>(
+            *mat_, freedofs_.get(), height_, width_,
+            row_ptr_, col_idx_, modified_values_);
     }
 
     shared_ptr<SparseMatrix<SCAL>> mat_;

@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 /**
  * @file ic_preconditioner.hpp
  * @brief Incomplete Cholesky (IC) preconditioner
@@ -15,7 +19,6 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <iostream>
 
 namespace sparsesolv {
 
@@ -214,11 +217,6 @@ public:
         return abmc_schedule_.ordering;
     }
 
-    /// Get the ABMC reverse ordering (reverse_ordering[new_row] = old_row)
-    const std::vector<index_t>& abmc_reverse_ordering() const {
-        return abmc_schedule_.reverse_ordering;
-    }
-
     /// Check if RCM ordering is available
     bool has_rcm_ordering() const {
         return !rcm_ordering_.empty();
@@ -306,16 +304,6 @@ public:
                 y[i] = abmc_y_perm_[perm[i]];
             });
         }
-    }
-
-    /**
-     * @brief Apply with composite original->RCM->ABMC ordering
-     *
-     * Delegates to apply_abmc() which uses composite_perm_ (pre-computed
-     * to handle both ABMC-only and RCM+ABMC paths).
-     */
-    void apply_orig_rcm_abmc(const Scalar* x, Scalar* y, index_t size) const {
-        apply_abmc(x, y, size);
     }
 
 private:
@@ -532,75 +520,10 @@ private:
     /**
      * @brief Reorder full matrix A according to ABMC permutation
      *
-     * Creates reordered_csr_ where entry A[i][j] maps to
-     * A_reordered[ordering[i]][ordering[j]].
+     * Delegates to reorder_matrix_with_perm() using the ABMC ordering.
      */
     void reorder_matrix(const SparseMatrixView<Scalar>& A) {
-        const index_t n = A.rows();
-        const auto& ord = abmc_schedule_.ordering;
-
-        reordered_csr_.rows = reordered_csr_.cols = n;
-
-        // First pass: count nnz per reordered row
-        std::vector<index_t> counts(n, 0);
-        for (index_t i = 0; i < n; ++i) {
-            auto [start, end] = A.row_range(i);
-            counts[ord[i]] += (end - start);
-        }
-
-        // Build row pointers
-        reordered_csr_.row_ptr.resize(n + 1);
-        reordered_csr_.row_ptr[0] = 0;
-        for (index_t i = 0; i < n; ++i) {
-            reordered_csr_.row_ptr[i + 1] = reordered_csr_.row_ptr[i] + counts[i];
-        }
-
-        // Second pass: fill column indices and values (unsorted within each row)
-        const index_t total_nnz = reordered_csr_.row_ptr[n];
-        reordered_csr_.col_idx.resize(total_nnz);
-        reordered_csr_.values.resize(total_nnz);
-
-        std::vector<index_t> pos(n);
-        for (index_t i = 0; i < n; ++i) pos[i] = reordered_csr_.row_ptr[i];
-
-        for (index_t i = 0; i < n; ++i) {
-            index_t new_i = ord[i];
-            auto [start, end] = A.row_range(i);
-            for (index_t k = start; k < end; ++k) {
-                index_t p = pos[new_i]++;
-                reordered_csr_.col_idx[p] = ord[A.col_idx()[k]];
-                reordered_csr_.values[p] = A.values()[k];
-            }
-        }
-
-        // Sort each row by column index (required for CSR invariant)
-        for (index_t i = 0; i < n; ++i) {
-            index_t row_start = reordered_csr_.row_ptr[i];
-            index_t row_end = reordered_csr_.row_ptr[i + 1];
-            index_t row_nnz = row_end - row_start;
-
-            if (row_nnz <= 1) continue;
-
-            // Build index array and sort
-            std::vector<index_t> indices(row_nnz);
-            for (index_t k = 0; k < row_nnz; ++k) indices[k] = k;
-            std::sort(indices.begin(), indices.end(), [&](index_t a, index_t b) {
-                return reordered_csr_.col_idx[row_start + a] <
-                       reordered_csr_.col_idx[row_start + b];
-            });
-
-            // Apply permutation
-            std::vector<index_t> sorted_cols(row_nnz);
-            std::vector<Scalar> sorted_vals(row_nnz);
-            for (index_t k = 0; k < row_nnz; ++k) {
-                sorted_cols[k] = reordered_csr_.col_idx[row_start + indices[k]];
-                sorted_vals[k] = reordered_csr_.values[row_start + indices[k]];
-            }
-            for (index_t k = 0; k < row_nnz; ++k) {
-                reordered_csr_.col_idx[row_start + k] = sorted_cols[k];
-                reordered_csr_.values[row_start + k] = sorted_vals[k];
-            }
-        }
+        reorder_matrix_with_perm(A, abmc_schedule_.ordering, reordered_csr_);
     }
 
     // ================================================================
@@ -878,38 +801,9 @@ private:
         actual_shift_ = shift;
     }
 
-    /**
-     * @brief Compute L^T (transpose of L)
-     */
+    /// Compute L^T (transpose of L)
     void compute_transpose() {
-        const index_t n = size_;
-        const index_t nnz = L_.nnz();
-        Lt_.rows = Lt_.cols = n;
-        Lt_.row_ptr.assign(n + 1, 0);
-        Lt_.col_idx.resize(nnz);
-        Lt_.values.resize(nnz);
-
-        // Count entries per column of L (= per row of L^T)
-        for (index_t k = 0; k < nnz; ++k) {
-            Lt_.row_ptr[L_.col_idx[k] + 1]++;
-        }
-
-        // Cumulative sum to get row pointers (sequential - short loop)
-        for (index_t i = 0; i < n; ++i) {
-            Lt_.row_ptr[i + 1] += Lt_.row_ptr[i];
-        }
-
-        // Fill in values using atomic counter increments
-        std::vector<index_t> counter(n, 0);
-        for (index_t i = 0; i < n; ++i) {
-            for (index_t k = L_.row_ptr[i]; k < L_.row_ptr[i + 1]; ++k) {
-                index_t j = L_.col_idx[k];
-                index_t pos = Lt_.row_ptr[j] + counter[j];
-                Lt_.col_idx[pos] = i;
-                Lt_.values[pos] = L_.values[k];
-                counter[j]++;
-            }
-        }
+        Lt_ = L_.transpose();
     }
 
     /**
@@ -1032,10 +926,6 @@ private:
         });
     }
 };
-
-// Type aliases
-using ICPreconditionerD = ICPreconditioner<double>;
-using ICPreconditionerC = ICPreconditioner<complex_t>;
 
 /**
  * @brief Adapter that wraps ICPreconditioner for use in reordered space

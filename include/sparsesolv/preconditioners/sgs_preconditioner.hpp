@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 /**
  * @file sgs_preconditioner.hpp
  * @brief Symmetric Gauss-Seidel (SGS) preconditioner
@@ -207,10 +211,6 @@ private:
         }
     }
 };
-
-// Type aliases
-using SGSPreconditionerD = SGSPreconditioner<double>;
-using SGSPreconditionerC = SGSPreconditioner<complex_t>;
 
 } // namespace sparsesolv
 

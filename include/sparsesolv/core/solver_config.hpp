@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 /**
  * @file solver_config.hpp
  * @brief Unified configuration for all SparseSolv solvers
@@ -118,13 +122,6 @@ struct SolverConfig {
     bool conjugate = false;
 
     //--------------------------------------------------
-    // Parallel options
-    //--------------------------------------------------
-
-    /// Number of threads for parallel operations (0 = auto)
-    int num_threads = 0;
-
-    //--------------------------------------------------
     // ABMC ordering parameters (for parallel triangular solves)
     //--------------------------------------------------
 
@@ -158,68 +155,6 @@ struct SolverConfig {
     /// matrix.
     bool abmc_use_rcm = false;
 
-    //--------------------------------------------------
-    // Builder pattern for convenient configuration
-    //--------------------------------------------------
-
-    SolverConfig& with_tolerance(double tol) {
-        tolerance = tol;
-        return *this;
-    }
-
-    SolverConfig& with_max_iterations(int max_iter) {
-        max_iterations = max_iter;
-        return *this;
-    }
-
-    SolverConfig& with_shift(double shift) {
-        shift_parameter = shift;
-        return *this;
-    }
-
-    SolverConfig& with_diagonal_scaling(bool enable = true) {
-        diagonal_scaling = enable;
-        return *this;
-    }
-
-    SolverConfig& with_residual_history(bool enable = true) {
-        save_residual_history = enable;
-        return *this;
-    }
-
-    SolverConfig& with_divergence_check(DivergenceCheck check, double threshold = 1000.0, int count = 100) {
-        divergence_check = check;
-        divergence_threshold = threshold;
-        divergence_count = count;
-        return *this;
-    }
-
-    SolverConfig& with_auto_shift(bool enable = true) {
-        auto_shift = enable;
-        return *this;
-    }
-
-    SolverConfig& with_conjugate(bool enable = true) {
-        conjugate = enable;
-        return *this;
-    }
-
-    SolverConfig& with_abmc(bool enable = true, int block_size = 4, int num_colors = 4) {
-        use_abmc = enable;
-        abmc_block_size = block_size;
-        abmc_num_colors = num_colors;
-        return *this;
-    }
-
-    SolverConfig& with_abmc_reorder_spmv(bool enable = true) {
-        abmc_reorder_spmv = enable;
-        return *this;
-    }
-
-    SolverConfig& with_abmc_rcm(bool enable = true) {
-        abmc_use_rcm = enable;
-        return *this;
-    }
 };
 
 } // namespace sparsesolv

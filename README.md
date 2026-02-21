@@ -1,5 +1,7 @@
 # SparseSolv
 
+[![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
+
 Header-only C++17 iterative solver library for sparse linear systems, with a standalone Python extension module for [NGSolve](https://ngsolve.org/).
 
 Fork of [JP-MARs/SparseSolv](https://github.com/JP-MARs/SparseSolv), specialized for NGSolve finite element applications.
@@ -9,6 +11,15 @@ Fork of [JP-MARs/SparseSolv](https://github.com/JP-MARs/SparseSolv), specialized
 **SparseSolv is provided as an independent module, separate from NGSolve.**
 It is NOT embedded into NGSolve's source tree. Instead, it is built as a standalone
 pybind11 extension module (`sparsesolv_ngsolve.pyd`) that links against an installed NGSolve.
+
+## Documentation
+
+See [docs/](docs/) for detailed documentation (in Japanese):
+- [Architecture](docs/architecture.md) - Source code structure and design
+- [Algorithms](docs/algorithms.md) - Algorithm descriptions (BDDC, IC, SGS-MRTR, CG)
+- [API Reference](docs/api_reference.md) - Python API reference
+- [Tutorials](docs/tutorials.md) - Practical examples
+- [Development](docs/development.md) - Build, test, and development notes
 
 ## Features
 
@@ -137,16 +148,9 @@ gfu.vec.data = inv * f.vec
 from sparsesolv_ngsolve import BDDCPreconditioner
 from ngsolve.krylovspace import CGSolver
 
-# Recommended: pass BilinearForm + FESpace (element matrices extracted in C++)
 pre = BDDCPreconditioner(a, fes, coarse_inverse="sparsecholesky")
 inv = CGSolver(a.mat, pre, tol=1e-10)
 gfu.vec.data = inv * f.vec
-
-# Alternative: pass assembled matrix + manual element info
-pre = BDDCPreconditioner(a.mat, freedofs=fes.FreeDofs(True),
-                          element_dofs=element_dofs,
-                          dof_types=dof_types,
-                          element_matrices=element_matrices)
 ```
 
 ### 3D Curl-Curl (Semi-Definite System)
@@ -285,6 +289,7 @@ if (result.converged) {
 
 ```
 ngsolve-sparsesolv/
+├── docs/                        # Documentation (Japanese)
 ├── include/sparsesolv/         # Header-only library
 │   ├── sparsesolv.hpp          # Main header (convenience includes)
 │   ├── core/                   # Types, config, matrix view, preconditioner base
@@ -315,20 +320,25 @@ ngsolve-sparsesolv/
    — ABMC ordering algorithm.
 
 2. Y. Tsuburaya, T. Mifune, T. Iwashita, E. Takahashi,
+   "MRTR法に基づく前処理付き反復法の数値実験",
+   *電気学会研究会資料*, SA-12-64, 2012.
+   — SGS-MRTR method: original domestic workshop paper.
+
+3. Y. Tsuburaya, T. Mifune, T. Iwashita, E. Takahashi,
    "Minimum Residual-Like Methods for Solving Ax = b with Shift-and-Invert Enhanced
    Multi-Step MRTR",
    *IEEE Transactions on Magnetics*, Vol. 49, No. 5, pp. 1569–1572, 2013.
    — SGS-MRTR solver.
 
-3. Y. Tsuburaya,
+4. Y. Tsuburaya,
    "大規模電磁界問題の有限要素解析のための反復法の開発",
    *博士論文*, 京都大学, 2016.
    — Comprehensive reference on iterative solvers for large-scale electromagnetic FEM.
 
-4. S. Hiruma, JP-MARs/SparseSolv,
+5. S. Hiruma, JP-MARs/SparseSolv,
    https://github.com/JP-MARs/SparseSolv
    — Original implementation (MPL 2.0 license).
 
 ## License
 
-See [LICENSE](LICENSE) for details.
+This project is licensed under the [Mozilla Public License 2.0](LICENSE).

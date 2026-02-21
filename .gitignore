@@ -22,10 +22,10 @@ __pycache__/
 
 # NGSolve trace files
 *.trace
-*.html
 
 # Benchmark results
-*.json
+benchmark_*.json
+results_*.json
 
 # Claude sessions
 .claude/

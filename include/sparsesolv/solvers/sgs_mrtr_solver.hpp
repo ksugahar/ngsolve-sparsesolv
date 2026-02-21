@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 /**
  * @file sgs_mrtr_solver.hpp
  * @brief SGS-MRTR solver (MRTR with Symmetric Gauss-Seidel preconditioning)
@@ -17,6 +21,7 @@
 
 #include "iterative_solver.hpp"
 #include "../core/constants.hpp"
+#include "../core/sparse_matrix_csr.hpp"
 #include "../core/level_schedule.hpp"
 #include <vector>
 #include <cmath>
@@ -256,15 +261,9 @@ private:
     std::vector<Scalar> Ard_;     // Approximate M^{-1} * A * rd
     std::vector<Scalar> temp_;    // Temporary buffer
 
-    // L (lower triangular of DAD) stored as CSR
-    std::vector<index_t> L_row_ptr_;
-    std::vector<index_t> L_col_idx_;
-    std::vector<Scalar> L_values_;
-
-    // L^T stored as CSR
-    std::vector<index_t> Lt_row_ptr_;
-    std::vector<index_t> Lt_col_idx_;
-    std::vector<Scalar> Lt_values_;
+    // L (lower triangular of DAD) and L^T stored as CSR
+    SparseMatrixCSR<Scalar> L_;
+    SparseMatrixCSR<Scalar> Lt_;
 
     // Level schedules for parallel triangular solves
     LevelSchedule fwd_schedule_;     // For forward solve (L)
@@ -290,48 +289,29 @@ private:
         const index_t n = this->size_;
         const auto& A = *this->A_;
 
-        L_row_ptr_.resize(n + 1);
-        L_col_idx_.clear();
-        L_values_.clear();
+        L_.rows = L_.cols = n;
+        L_.row_ptr.resize(n + 1);
+        L_.col_idx.clear();
+        L_.values.clear();
 
-        L_row_ptr_[0] = 0;
+        L_.row_ptr[0] = 0;
         for (index_t i = 0; i < n; ++i) {
             auto [start, end] = A.row_range(i);
             for (index_t k = start; k < end; ++k) {
                 index_t j = A.col_idx()[k];
                 if (j <= i) {
-                    L_col_idx_.push_back(j);
-                    L_values_.push_back(D_[i] * A.values()[k] * D_[j]);
+                    L_.col_idx.push_back(j);
+                    L_.values.push_back(D_[i] * A.values()[k] * D_[j]);
                 }
             }
-            L_row_ptr_[i + 1] = static_cast<index_t>(L_col_idx_.size());
+            L_.row_ptr[i + 1] = static_cast<index_t>(L_.col_idx.size());
         }
 
-        // Compute L^T (transpose of L)
-        const size_t nnz = L_col_idx_.size();
-        Lt_row_ptr_.assign(n + 1, 0);
-        Lt_col_idx_.resize(nnz);
-        Lt_values_.resize(nnz);
-
-        for (size_t k = 0; k < nnz; ++k)
-            Lt_row_ptr_[L_col_idx_[k] + 1]++;
-        for (index_t i = 0; i < n; ++i)
-            Lt_row_ptr_[i + 1] += Lt_row_ptr_[i];
-
-        std::vector<index_t> counter(n, 0);
-        for (index_t i = 0; i < n; ++i) {
-            for (index_t k = L_row_ptr_[i]; k < L_row_ptr_[i + 1]; ++k) {
-                index_t j = L_col_idx_[k];
-                index_t pos = Lt_row_ptr_[j] + counter[j];
-                Lt_col_idx_[pos] = i;
-                Lt_values_[pos] = L_values_[k];
-                counter[j]++;
-            }
-        }
+        Lt_ = L_.transpose();
 
         // Build level schedules for parallel triangular solves
-        fwd_schedule_.build_from_lower(L_row_ptr_.data(), L_col_idx_.data(), n);
-        bwd_schedule_.build_from_upper(Lt_row_ptr_.data(), Lt_col_idx_.data(), n);
+        fwd_schedule_.build_from_lower(L_.row_ptr.data(), L_.col_idx.data(), n);
+        bwd_schedule_.build_from_upper(Lt_.row_ptr.data(), Lt_.col_idx.data(), n);
     }
 
     /**
@@ -345,10 +325,10 @@ private:
             parallel_for(level_size, [&](index_t idx) {
                 const index_t i = level[idx];
                 Scalar s = rhs[i];
-                const index_t row_end = L_row_ptr_[i + 1] - 1; // Exclude diagonal
-                for (index_t k = L_row_ptr_[i]; k < row_end; ++k)
-                    s -= L_values_[k] * y[L_col_idx_[k]];
-                y[i] = s / L_values_[row_end]; // Divide by diagonal
+                const index_t row_end = L_.row_ptr[i + 1] - 1;
+                for (index_t k = L_.row_ptr[i]; k < row_end; ++k)
+                    s -= L_.values[k] * y[L_.col_idx[k]];
+                y[i] = s / L_.values[row_end];
             });
         }
     }
@@ -364,10 +344,10 @@ private:
             parallel_for(level_size, [&](index_t idx) {
                 const index_t i = level[idx];
                 Scalar s = rhs[i];
-                const index_t row_end = Lt_row_ptr_[i + 1];
-                for (index_t k = Lt_row_ptr_[i] + 1; k < row_end; ++k)
-                    s -= Lt_values_[k] * y[Lt_col_idx_[k]];
-                y[i] = s / Lt_values_[Lt_row_ptr_[i]]; // Divide by diagonal
+                const index_t row_end = Lt_.row_ptr[i + 1];
+                for (index_t k = Lt_.row_ptr[i] + 1; k < row_end; ++k)
+                    s -= Lt_.values[k] * y[Lt_.col_idx[k]];
+                y[i] = s / Lt_.values[Lt_.row_ptr[i]];
             });
         }
     }
@@ -376,18 +356,9 @@ private:
      * @brief Matrix-vector multiplication: y = L * x
      */
     void multiply_L(const Scalar* x, Scalar* y) const {
-        parallel_for(this->size_, [&](index_t i) {
-            Scalar s = Scalar(0);
-            for (index_t k = L_row_ptr_[i]; k < L_row_ptr_[i + 1]; ++k)
-                s += L_values_[k] * x[L_col_idx_[k]];
-            y[i] = s;
-        });
+        L_.multiply(x, y);
     }
 };
-
-// Type aliases
-using SGSMRTRSolverD = SGSMRTRSolver<double>;
-using SGSMRTRSolverC = SGSMRTRSolver<complex_t>;
 
 } // namespace sparsesolv
 

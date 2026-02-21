@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 /**
  * @file iterative_solver.hpp
  * @brief Base class for iterative linear solvers
@@ -39,8 +43,6 @@ namespace sparsesolv {
 template<typename Scalar = double>
 class IterativeSolver {
 public:
-    using value_type = Scalar;
-
     virtual ~IterativeSolver() = default;
 
     /**
@@ -330,10 +332,6 @@ protected:
     // Divergence tracking
     int bad_count_ = 0;
 };
-
-// Type aliases
-using IterativeSolverD = IterativeSolver<double>;
-using IterativeSolverC = IterativeSolver<complex_t>;
 
 } // namespace sparsesolv
 

@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 /**
  * @file sparse_matrix_view.hpp
  * @brief Zero-copy view into sparse matrices (CSR format)
@@ -53,9 +57,6 @@ namespace sparsesolv {
 template<typename Scalar = double>
 class SparseMatrixView {
 public:
-    using value_type = Scalar;
-    using index_type = index_t;
-
     /**
      * @brief Construct a view from CSR arrays
      * @param rows Number of rows
@@ -94,9 +95,6 @@ public:
 
     /// Number of non-zeros
     index_t nnz() const { return row_ptr_ ? row_ptr_[rows_] : 0; }
-
-    /// Check if the view is valid
-    bool is_valid() const { return row_ptr_ != nullptr; }
 
     /// Raw access to row pointers
     const index_t* row_ptr() const { return row_ptr_; }
@@ -166,17 +164,6 @@ public:
         return (*this)(i, i);
     }
 
-    /**
-     * @brief Extract diagonal as a vector
-     * @param diag Output vector (size: min(rows, cols))
-     */
-    void get_diagonal(Scalar* diag) const {
-        index_t n = std::min(rows_, cols_);
-        for (index_t i = 0; i < n; ++i) {
-            diag[i] = diagonal(i);
-        }
-    }
-
 private:
     index_t rows_;
     index_t cols_;
@@ -184,10 +171,6 @@ private:
     const index_t* col_idx_;
     const Scalar* values_;
 };
-
-// Type aliases
-using SparseMatrixViewD = SparseMatrixView<double>;
-using SparseMatrixViewC = SparseMatrixView<complex_t>;
 
 } // namespace sparsesolv
 

@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 /**
  * @file cg_solver.hpp
  * @brief Conjugate Gradient (CG) solver
@@ -134,10 +138,6 @@ protected:
         return this->build_result(false, config.max_iterations, final_norm);
     }
 };
-
-// Type aliases
-using CGSolverD = CGSolver<double>;
-using CGSolverC = CGSolver<complex_t>;
 
 } // namespace sparsesolv
 

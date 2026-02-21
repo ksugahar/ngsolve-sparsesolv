@@ -1,5 +1,9 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 /// @file sparsesolv_python_export.hpp
-/// @brief Pybind11 bindings: typed classes (D/C) + factory functions with auto-dispatch
+/// @brief Pybind11 bindings: type registration + factory functions with auto-dispatch
 
 #ifndef NGSOLVE_SPARSESOLV_PYTHON_EXPORT_HPP
 #define NGSOLVE_SPARSESOLV_PYTHON_EXPORT_HPP
@@ -38,204 +42,111 @@ inline void ExportSparseSolvResult_impl(py::module& m) {
 }
 
 // ============================================================================
-// Internal: Typed class registration (D/C suffix)
+// Internal: Type registration (D/C suffix, no constructors — use factories)
 // ============================================================================
 
 template<typename SCAL>
 void ExportSparseSolvTyped(py::module& m, const std::string& suffix) {
 
-  // IC Preconditioner (ICPreconditionerD / ICPreconditionerC)
+  // IC Preconditioner type registration (factory creates instances, methods accessible via downcast)
   {
     std::string cls_name = "ICPreconditioner" + suffix;
     py::class_<SparseSolvICPreconditioner<SCAL>,
                shared_ptr<SparseSolvICPreconditioner<SCAL>>,
-               BaseMatrix>(m, cls_name.c_str(),
-               "Incomplete Cholesky preconditioner (typed). Use ICPreconditioner() factory instead.")
-      .def(py::init([](shared_ptr<SparseMatrix<SCAL>> mat,
-                       py::object freedofs, double shift) {
-        shared_ptr<BitArray> sp_freedofs = nullptr;
-        if (!freedofs.is_none())
-          sp_freedofs = py::cast<shared_ptr<BitArray>>(freedofs);
-        return make_shared<SparseSolvICPreconditioner<SCAL>>(mat, sp_freedofs, shift);
-      }), py::arg("mat"), py::arg("freedofs") = py::none(), py::arg("shift") = 1.05)
-      .def("Update", &SparseSolvICPreconditioner<SCAL>::Update,
-          "Update preconditioner (recompute factorization after matrix change)")
+               BaseMatrix>(m, cls_name.c_str())
+      .def("Update", &SparseSolvICPreconditioner<SCAL>::Update)
       .def_property("shift",
           &SparseSolvICPreconditioner<SCAL>::GetShift,
-          &SparseSolvICPreconditioner<SCAL>::SetShift,
-          "Shift parameter for IC decomposition");
+          &SparseSolvICPreconditioner<SCAL>::SetShift);
   }
 
-  // SGS Preconditioner (SGSPreconditionerD / SGSPreconditionerC)
+  // SGS Preconditioner type registration
   {
     std::string cls_name = "SGSPreconditioner" + suffix;
     py::class_<SparseSolvSGSPreconditioner<SCAL>,
                shared_ptr<SparseSolvSGSPreconditioner<SCAL>>,
-               BaseMatrix>(m, cls_name.c_str(),
-               "Symmetric Gauss-Seidel preconditioner (typed). Use SGSPreconditioner() factory instead.")
-      .def(py::init([](shared_ptr<SparseMatrix<SCAL>> mat,
-                       py::object freedofs) {
-        shared_ptr<BitArray> sp_freedofs = nullptr;
-        if (!freedofs.is_none())
-          sp_freedofs = py::cast<shared_ptr<BitArray>>(freedofs);
-        return make_shared<SparseSolvSGSPreconditioner<SCAL>>(mat, sp_freedofs);
-      }), py::arg("mat"), py::arg("freedofs") = py::none())
-      .def("Update", &SparseSolvSGSPreconditioner<SCAL>::Update,
-          "Update preconditioner (recompute after matrix change)");
+               BaseMatrix>(m, cls_name.c_str())
+      .def("Update", &SparseSolvSGSPreconditioner<SCAL>::Update);
   }
 
-  // BDDC Preconditioner (BDDCPreconditionerD / BDDCPreconditionerC)
+  // BDDC Preconditioner type registration
   {
     std::string cls_name = "BDDCPreconditioner" + suffix;
     py::class_<SparseSolvBDDCPreconditioner<SCAL>,
                shared_ptr<SparseSolvBDDCPreconditioner<SCAL>>,
-               BaseMatrix>(m, cls_name.c_str(),
-               "BDDC preconditioner (typed). Use BDDCPreconditioner() factory instead.")
-      .def(py::init([](shared_ptr<SparseMatrix<SCAL>> mat,
-                       py::object freedofs,
-                       std::vector<std::vector<sparsesolv::index_t>> element_dofs,
-                       std::vector<int> dof_types_int,
-                       py::list element_matrices_py,
-                       std::string coarse_inverse) {
-        shared_ptr<BitArray> sp_freedofs = nullptr;
-        if (!freedofs.is_none())
-          sp_freedofs = py::cast<shared_ptr<BitArray>>(freedofs);
-        std::vector<sparsesolv::DOFType> dof_types(dof_types_int.size());
-        for (size_t i = 0; i < dof_types_int.size(); ++i)
-          dof_types[i] = static_cast<sparsesolv::DOFType>(dof_types_int[i]);
-        auto element_matrices = ConvertElementMatrices<SCAL>(element_matrices_py);
-        return make_shared<SparseSolvBDDCPreconditioner<SCAL>>(
-            mat, sp_freedofs, std::move(element_dofs),
-            std::move(dof_types), std::move(element_matrices),
-            std::move(coarse_inverse));
-      }),
-          py::arg("mat"),
-          py::arg("freedofs") = py::none(),
-          py::arg("element_dofs") = std::vector<std::vector<sparsesolv::index_t>>(),
-          py::arg("dof_types") = std::vector<int>(),
-          py::arg("element_matrices") = py::list(),
-          py::arg("coarse_inverse") = "sparsecholesky")
-      .def("Update", &SparseSolvBDDCPreconditioner<SCAL>::Update,
-          "Update preconditioner (recompute factorization after matrix change)")
+               BaseMatrix>(m, cls_name.c_str())
       .def_property_readonly("num_wirebasket_dofs",
-          &SparseSolvBDDCPreconditioner<SCAL>::NumWirebasketDofs,
-          "Number of wirebasket (coarse) DOFs")
+          &SparseSolvBDDCPreconditioner<SCAL>::NumWirebasketDofs)
       .def_property_readonly("num_interface_dofs",
-          &SparseSolvBDDCPreconditioner<SCAL>::NumInterfaceDofs,
-          "Number of interface (local) DOFs")
-      .def_property_readonly("is_element_mode",
-          &SparseSolvBDDCPreconditioner<SCAL>::IsElementMode,
-          "Whether element-by-element BDDC mode is active");
+          &SparseSolvBDDCPreconditioner<SCAL>::NumInterfaceDofs);
   }
 
-  // SparseSolv Solver (SparseSolvSolverD / SparseSolvSolverC)
+  // SparseSolv Solver type registration
   {
     std::string cls_name = "SparseSolvSolver" + suffix;
     py::class_<SparseSolvSolver<SCAL>,
                shared_ptr<SparseSolvSolver<SCAL>>,
-               BaseMatrix>(m, cls_name.c_str(),
-               "SparseSolv iterative solver (typed). Use SparseSolvSolver() factory instead.")
-      .def(py::init([](shared_ptr<SparseMatrix<SCAL>> mat,
-                       const string& method, py::object freedofs,
-                       double tol, int maxiter, double shift,
-                       bool save_best_result, bool save_residual_history,
-                       bool printrates) {
-        shared_ptr<BitArray> sp_freedofs = nullptr;
-        if (!freedofs.is_none())
-          sp_freedofs = py::cast<shared_ptr<BitArray>>(freedofs);
-        return make_shared<SparseSolvSolver<SCAL>>(
-            mat, method, sp_freedofs, tol, maxiter, shift,
-            save_best_result, save_residual_history, printrates);
-      }),
-          py::arg("mat"),
-          py::arg("method") = "ICCG",
-          py::arg("freedofs") = py::none(),
-          py::arg("tol") = 1e-10,
-          py::arg("maxiter") = 1000,
-          py::arg("shift") = 1.05,
-          py::arg("save_best_result") = true,
-          py::arg("save_residual_history") = false,
-          py::arg("printrates") = false)
+               BaseMatrix>(m, cls_name.c_str())
       .def("Solve", [](SparseSolvSolver<SCAL>& self,
                        const BaseVector& rhs, BaseVector& sol) {
         return self.Solve(rhs, sol);
-      }, py::arg("rhs"), py::arg("sol"),
-         "Solve Ax = b. Returns SparseSolvResult with convergence info.")
+      }, py::arg("rhs"), py::arg("sol"))
       .def_property("method",
           &SparseSolvSolver<SCAL>::GetMethod,
-          &SparseSolvSolver<SCAL>::SetMethod,
-          "Solver method: ICCG, SGSMRTR, CG")
+          &SparseSolvSolver<SCAL>::SetMethod)
       .def_property("tol",
           &SparseSolvSolver<SCAL>::GetTolerance,
-          &SparseSolvSolver<SCAL>::SetTolerance,
-          "Relative convergence tolerance")
+          &SparseSolvSolver<SCAL>::SetTolerance)
       .def_property("maxiter",
           &SparseSolvSolver<SCAL>::GetMaxIterations,
-          &SparseSolvSolver<SCAL>::SetMaxIterations,
-          "Maximum number of iterations")
+          &SparseSolvSolver<SCAL>::SetMaxIterations)
       .def_property("shift",
           &SparseSolvSolver<SCAL>::GetShift,
-          &SparseSolvSolver<SCAL>::SetShift,
-          "Shift parameter for IC preconditioner")
+          &SparseSolvSolver<SCAL>::SetShift)
       .def_property("save_best_result",
           &SparseSolvSolver<SCAL>::GetSaveBestResult,
-          &SparseSolvSolver<SCAL>::SetSaveBestResult,
-          "Track best solution during iteration")
+          &SparseSolvSolver<SCAL>::SetSaveBestResult)
       .def_property("save_residual_history",
           &SparseSolvSolver<SCAL>::GetSaveResidualHistory,
-          &SparseSolvSolver<SCAL>::SetSaveResidualHistory,
-          "Record residual at each iteration")
+          &SparseSolvSolver<SCAL>::SetSaveResidualHistory)
       .def_property("printrates",
           &SparseSolvSolver<SCAL>::GetPrintRates,
-          &SparseSolvSolver<SCAL>::SetPrintRates,
-          "Print convergence information after solve")
+          &SparseSolvSolver<SCAL>::SetPrintRates)
       .def_property("auto_shift",
           &SparseSolvSolver<SCAL>::GetAutoShift,
-          &SparseSolvSolver<SCAL>::SetAutoShift,
-          "Enable automatic shift adjustment for IC decomposition")
+          &SparseSolvSolver<SCAL>::SetAutoShift)
       .def_property("diagonal_scaling",
           &SparseSolvSolver<SCAL>::GetDiagonalScaling,
-          &SparseSolvSolver<SCAL>::SetDiagonalScaling,
-          "Enable diagonal scaling for IC preconditioner")
+          &SparseSolvSolver<SCAL>::SetDiagonalScaling)
       .def_property("divergence_check",
           &SparseSolvSolver<SCAL>::GetDivergenceCheck,
-          &SparseSolvSolver<SCAL>::SetDivergenceCheck,
-          "Enable stagnation-based early termination")
+          &SparseSolvSolver<SCAL>::SetDivergenceCheck)
       .def_property("divergence_threshold",
           &SparseSolvSolver<SCAL>::GetDivergenceThreshold,
-          &SparseSolvSolver<SCAL>::SetDivergenceThreshold,
-          "Multiplier for divergence detection (stop if residual > best * threshold)")
+          &SparseSolvSolver<SCAL>::SetDivergenceThreshold)
       .def_property("divergence_count",
           &SparseSolvSolver<SCAL>::GetDivergenceCount,
-          &SparseSolvSolver<SCAL>::SetDivergenceCount,
-          "Number of consecutive bad iterations before declaring divergence")
+          &SparseSolvSolver<SCAL>::SetDivergenceCount)
       .def_property("conjugate",
           &SparseSolvSolver<SCAL>::GetConjugate,
-          &SparseSolvSolver<SCAL>::SetConjugate,
-          "Use conjugated inner product for Hermitian systems (default: False for complex-symmetric)")
+          &SparseSolvSolver<SCAL>::SetConjugate)
       .def_property("use_abmc",
           &SparseSolvSolver<SCAL>::GetUseABMC,
-          &SparseSolvSolver<SCAL>::SetUseABMC,
-          "Enable ABMC (Algebraic Block Multi-Color) ordering for parallel triangular solves")
+          &SparseSolvSolver<SCAL>::SetUseABMC)
       .def_property("abmc_block_size",
           &SparseSolvSolver<SCAL>::GetABMCBlockSize,
-          &SparseSolvSolver<SCAL>::SetABMCBlockSize,
-          "Number of rows per block for ABMC ordering (default: 4)")
+          &SparseSolvSolver<SCAL>::SetABMCBlockSize)
       .def_property("abmc_num_colors",
           &SparseSolvSolver<SCAL>::GetABMCNumColors,
-          &SparseSolvSolver<SCAL>::SetABMCNumColors,
-          "Number of colors for ABMC graph coloring (default: 4)")
+          &SparseSolvSolver<SCAL>::SetABMCNumColors)
       .def_property("abmc_reorder_spmv",
           &SparseSolvSolver<SCAL>::GetABMCReorderSpMV,
-          &SparseSolvSolver<SCAL>::SetABMCReorderSpMV,
-          "Run SpMV on ABMC-reordered matrix (default: False = use original)")
+          &SparseSolvSolver<SCAL>::SetABMCReorderSpMV)
       .def_property("abmc_use_rcm",
           &SparseSolvSolver<SCAL>::GetABMCUseRCM,
-          &SparseSolvSolver<SCAL>::SetABMCUseRCM,
-          "Apply RCM bandwidth reduction before ABMC (default: False)")
+          &SparseSolvSolver<SCAL>::SetABMCUseRCM)
       .def_property_readonly("last_result",
-          &SparseSolvSolver<SCAL>::GetLastResult,
-          "Result from the last Solve() or Mult() call");
+          &SparseSolvSolver<SCAL>::GetLastResult);
   }
 }
 
@@ -246,24 +157,6 @@ void ExportSparseSolvTyped(py::module& m, const std::string& suffix) {
 inline shared_ptr<BitArray> ExtractFreeDofs(py::object freedofs) {
   if (freedofs.is_none()) return nullptr;
   return py::cast<shared_ptr<BitArray>>(freedofs);
-}
-
-/// Convert Python list of nested lists to vector<DenseMatrix<SCAL>>
-template<typename SCAL>
-std::vector<sparsesolv::DenseMatrix<SCAL>> ConvertElementMatrices(py::list py_list) {
-  std::vector<sparsesolv::DenseMatrix<SCAL>> result;
-  for (size_t e = 0; e < py::len(py_list); ++e) {
-    auto nested = py_list[e].cast<std::vector<std::vector<SCAL>>>();
-    sparsesolv::index_t rows = static_cast<sparsesolv::index_t>(nested.size());
-    sparsesolv::index_t cols = rows > 0 ?
-        static_cast<sparsesolv::index_t>(nested[0].size()) : 0;
-    sparsesolv::DenseMatrix<SCAL> dm(rows, cols);
-    for (sparsesolv::index_t i = 0; i < rows; ++i)
-      for (sparsesolv::index_t j = 0; j < cols; ++j)
-        dm(i, j) = nested[i][j];
-    result.push_back(std::move(dm));
-  }
-  return result;
 }
 
 // ============================================================================
@@ -299,6 +192,13 @@ shared_ptr<BaseMatrix> CreateBDDCFromBilinearForm(
 
     LocalHeap lh(10000000, "bddc_setup", true);  // mult_by_threads=true
 
+    // Filter to VOL integrators only
+    Array<shared_ptr<ngfem::BilinearFormIntegrator>> vol_integrators;
+    for (auto& integ : integrators) {
+        if (integ->VB() == ngfem::VOL)
+            vol_integrators.Append(integ);
+    }
+
     ngcomp::IterateElements(*fes, ngfem::VOL, lh,
         [&](ngcomp::FESpace::Element el, LocalHeap& lh_thread) {
             size_t elnr = el.Nr();
@@ -325,8 +225,8 @@ shared_ptr<BaseMatrix> CreateBDDCFromBilinearForm(
             FlatMatrix<SCAL> elmat(ndof_el, ndof_el, lh_thread);
             elmat = SCAL(0);
 
-            // Sum contributions from all integrators
-            for (auto& integrator : integrators) {
+            // Sum contributions from VOL integrators only
+            for (auto& integrator : vol_integrators) {
                 FlatMatrix<SCAL> contrib(ndof_el, ndof_el, lh_thread);
                 contrib = SCAL(0);
                 integrator->CalcElementMatrix(fe, trafo, contrib, lh_thread);
@@ -424,80 +324,35 @@ freedofs : BitArray, optional
 
   // ---- BDDCPreconditioner factory ----
   m.def("BDDCPreconditioner", [](py::object first_arg,
-                                  py::object freedofs,
-                                  std::vector<std::vector<sparsesolv::index_t>> element_dofs,
-                                  std::vector<int> dof_types_int,
-                                  py::list element_matrices_py,
+                                  py::object second_arg,
                                   std::string coarse_inverse) {
     // BilinearForm API: BDDCPreconditioner(a, fes, coarse_inverse=...)
     try {
       auto bfa = py::cast<shared_ptr<ngcomp::BilinearForm>>(first_arg);
-      auto fes = py::cast<shared_ptr<ngcomp::FESpace>>(freedofs);
+      auto fes = py::cast<shared_ptr<ngcomp::FESpace>>(second_arg);
       if (bfa->GetMatrixPtr()->IsComplex())
         return CreateBDDCFromBilinearForm<Complex>(bfa, fes, coarse_inverse);
       else
         return CreateBDDCFromBilinearForm<double>(bfa, fes, coarse_inverse);
-    } catch (py::cast_error&) {}
-
-    // Matrix API: BDDCPreconditioner(mat, freedofs=..., element_dofs=..., ...)
-    auto mat = py::cast<shared_ptr<BaseMatrix>>(first_arg);
-    auto sp_freedofs = ExtractFreeDofs(freedofs);
-    std::vector<sparsesolv::DOFType> dof_types(dof_types_int.size());
-    for (size_t i = 0; i < dof_types_int.size(); ++i)
-      dof_types[i] = static_cast<sparsesolv::DOFType>(dof_types_int[i]);
-    shared_ptr<BaseMatrix> result;
-    if (mat->IsComplex()) {
-      auto sp = dynamic_pointer_cast<SparseMatrix<Complex>>(mat);
-      if (!sp) throw py::type_error("BDDCPreconditioner: expected SparseMatrix");
-      auto p = make_shared<SparseSolvBDDCPreconditioner<Complex>>(
-          sp, sp_freedofs, std::move(element_dofs),
-          std::move(dof_types), ConvertElementMatrices<Complex>(element_matrices_py),
-          std::move(coarse_inverse));
-      p->Update();
-      result = p;
-    } else {
-      auto sp = dynamic_pointer_cast<SparseMatrix<double>>(mat);
-      if (!sp) throw py::type_error("BDDCPreconditioner: expected SparseMatrix");
-      auto p = make_shared<SparseSolvBDDCPreconditioner<double>>(
-          sp, sp_freedofs, std::move(element_dofs),
-          std::move(dof_types), ConvertElementMatrices<double>(element_matrices_py),
-          std::move(coarse_inverse));
-      p->Update();
-      result = p;
+    } catch (py::cast_error&) {
+      throw py::type_error(
+          "BDDCPreconditioner(a, fes): expected BilinearForm and FESpace");
     }
-    return result;
   },
-  py::arg("mat"),
-  py::arg("freedofs") = py::none(),
-  py::arg("element_dofs") = std::vector<std::vector<sparsesolv::index_t>>(),
-  py::arg("dof_types") = std::vector<int>(),
-  py::arg("element_matrices") = py::list(),
+  py::arg("a"),
+  py::arg("fes"),
   py::arg("coarse_inverse") = "sparsecholesky",
   R"raw_string(
 BDDC (Balancing Domain Decomposition by Constraints) Preconditioner.
 
-Two APIs:
-
-1. ``BDDCPreconditioner(a, fes)`` — extracts element matrices from BilinearForm (recommended)
-2. ``BDDCPreconditioner(mat, freedofs=..., element_dofs=..., dof_types=..., element_matrices=...)``
-
-Two modes:
-
-- Block elimination (no element_matrices): exact (~2 iters), O(n_if^3), small problems
-- Element-by-element (with element_matrices): scalable, ~15-20 iters
+Extracts element matrices from BilinearForm and builds element-by-element BDDC.
 
 Parameters:
 
-mat : BilinearForm or SparseMatrix
-  BilinearForm for automatic extraction, or assembled SparseMatrix.
-freedofs : FESpace or BitArray
-  FESpace (with BilinearForm API) or BitArray (fes.FreeDofs(True)).
-element_dofs : list[list[int]]
-  Element-to-DOF mapping (matrix API only).
-dof_types : list[int]
-  0=wirebasket, 1=interface (matrix API only).
-element_matrices : list[list[list[float]]]
-  True element stiffness matrices (matrix API only).
+a : BilinearForm
+  Assembled BilinearForm.
+fes : FESpace
+  Finite element space.
 coarse_inverse : str
   Coarse solver: "sparsecholesky" (default), "pardiso", "dense".
 )raw_string");
@@ -594,7 +449,7 @@ Properties (set after construction):
 // Public API: Single entry point for NGSolve integration
 // ============================================================================
 
-/// Register all SparseSolv Python bindings (typed classes + factory functions)
+/// Register all SparseSolv Python bindings (type registration + factory functions)
 inline void ExportSparseSolvBindings(py::module& m) {
   ExportSparseSolvResult_impl(m);
   ExportSparseSolvTyped<double>(m, "D");
