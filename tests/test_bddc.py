@@ -275,33 +275,6 @@ def test_bddc_vs_ngsolve_eddy_current():
         assert inv_ss.iterations <= 2 * inv_ng.iterations + 5
 
 
-def test_dense_inverse():
-    """Test DenseMatrix LU inverse accuracy (via BDDC assembly path)."""
-    box = Box(Pnt(0, 0, 0), Pnt(1, 1, 1))
-    for face in box.faces:
-        face.name = "outer"
-    mesh = box.GenerateMesh(maxh=0.5)
-
-    fes = H1(mesh, order=3, dirichlet="outer")
-    u, v = fes.TnT()
-
-    a = BilinearForm(fes)
-    a += InnerProduct(grad(u), grad(v)) * dx
-    a.Assemble()
-
-    f = LinearForm(fes)
-    f += 1 * v * dx
-    f.Assemble()
-
-    pre = BDDCPreconditioner(a, fes)
-
-    gfu = GridFunction(fes)
-    inv = CGSolver(a.mat, pre, printrates=False, tol=1e-8, maxiter=300)
-    gfu.vec.data = inv * f.vec
-
-    print(f"\nDense inverse test: {inv.iterations} iterations, DOF={fes.ndof}")
-    assert inv.iterations < 300, "BDDC failed to converge"
-
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

@@ -11,7 +11,7 @@
 - BDDC (Balancing Domain Decomposition by Constraints) 前処理行列
   - BilinearForm からの要素ごとの構成
   - NGSolve CouplingType による Wirebasket/interface DOF 分類
-  - 粗解法: SparseCholesky (デフォルト)、PARDISO、dense LU
+  - 粗解法: SparseCholesky (デフォルト)、PARDISO
   - メッシュ非依存収束 (すべてのテスト問題で CG 2 反復)
 - `docs/` の日本語ドキュメント (アーキテクチャ、アルゴリズム、API リファレンス、チュートリアル)
 - すべてのソースファイルに MPL 2.0 ライセンスヘッダ

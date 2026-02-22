@@ -46,9 +46,6 @@ public:
         element_matrices_ = std::move(element_matrices);
     }
 
-    /// Skip dense coarse inverse (call set_coarse_solver() after setup instead)
-    void set_use_external_coarse(bool use) { use_external_coarse_ = use; }
-
     /// Set external coarse solver: void(const Scalar* rhs, Scalar* sol) on compact wb vectors
     void set_coarse_solver(std::function<void(const Scalar*, Scalar*)> solver) {
         coarse_solver_ = std::move(solver);
@@ -77,7 +74,6 @@ public:
     index_t num_interface_dofs() const { return n_if_; }
 
 private:
-    bool use_external_coarse_ = false;
     std::function<void(const Scalar*, Scalar*)> coarse_solver_;
 
     // Input data
@@ -101,7 +97,6 @@ private:
     SparseMatrixCSR<Scalar> het_csr_;      // harmonic extension transpose (full space, wb->if)
     SparseMatrixCSR<Scalar> is_csr_;       // inner solve (full space, if->if)
     SparseMatrixCSR<Scalar> wb_csr_;       // wirebasket Schur complement (compact n_wb x n_wb)
-    DenseMatrix<Scalar> wb_dense_inv_;     // dense inverse of wirebasket Schur complement
     std::vector<double> weight_;           // DOF weights
 
     // Work vectors for apply (mutable for const apply)
@@ -153,10 +148,6 @@ private:
         wb_csr_ = wb_coo.to_csr();
 
         finalize_weights();
-
-        if (!use_external_coarse_) {
-            build_coarse_dense_inverse(wb_csr_);
-        }
 
         // Free element matrices (no longer needed)
         element_matrices_.clear();
@@ -306,15 +297,6 @@ private:
         }
     }
 
-    void build_coarse_dense_inverse(const SparseMatrixCSR<Scalar>& wb_csr) {
-        DenseMatrix<Scalar> wb_dense(n_wb_, n_wb_);
-        for (index_t i = 0; i < n_wb_; ++i)
-            for (index_t k = wb_csr.row_ptr[i]; k < wb_csr.row_ptr[i + 1]; ++k)
-                wb_dense(i, wb_csr.col_idx[k]) = wb_csr.values[k];
-        wb_dense_inv_ = wb_dense;
-        wb_dense_inv_.invert();
-    }
-
     /// Apply BDDC: y = (I + he) * (S_wb^{-1} * (I + he^T) * x + is * x)
     void apply_element_bddc(const Scalar* x, Scalar* y, index_t size) const {
         // Step 1: y = x
@@ -329,11 +311,7 @@ private:
         for (index_t k = 0; k < n_wb_; ++k)
             wb_work1_[k] = y[wb_dofs_[k]];
 
-        if (coarse_solver_) {
-            coarse_solver_(wb_work1_.data(), wb_work2_.data());
-        } else {
-            wb_dense_inv_.matvec(wb_work1_.data(), wb_work2_.data());
-        }
+        coarse_solver_(wb_work1_.data(), wb_work2_.data());
 
         std::fill(work1_.begin(), work1_.end(), Scalar(0));
         for (index_t k = 0; k < n_wb_; ++k)

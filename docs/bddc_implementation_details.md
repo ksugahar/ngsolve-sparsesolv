@@ -341,7 +341,6 @@ Wirebasket Schur 補体 `wb_csr_` ($n_{wb} \times n_{wb}$) に対する直接法
 |-------------------|------|------|
 | `"sparsecholesky"` | NGSolve SparseCholesky | 標準（既定） |
 | `"pardiso"` | Intel PARDISO | 大規模 wirebasket 向け |
-| `"dense"` | SparseSolv 密 LU | テスト用 |
 
 粗ソルバーは **コールバック関数** `void(const Scalar* rhs, Scalar* sol)` として BDDC コアに渡されます。コールバックのインターフェース:
 

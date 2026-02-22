@@ -53,10 +53,9 @@ python -m pytest tests/test_sparsesolv.py tests/test_bddc.py -v --tb=short
   - ICCG, SGSMRTR, CG, IC, SGS の各種問題
   - 2D/3D, H1/VectorH1/HCurl, 実数/複素数
   - ABMC順序付け, 対角スケーリング, auto-shift
-- `test_bddc.py`: BDDCテスト (7件)
+- `test_bddc.py`: BDDCテスト (6件)
   - H1 Poisson, NGSolve比較, メッシュ非依存性
   - HCurl curl-curl, 渦電流 (複素数)
-  - 密逆行列精度
 
 ---
 

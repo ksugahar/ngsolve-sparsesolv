@@ -354,7 +354,7 @@ a : BilinearForm
 fes : FESpace
   Finite element space.
 coarse_inverse : str
-  Coarse solver: "sparsecholesky" (default), "pardiso", "dense".
+  Coarse solver: "sparsecholesky" (default), "pardiso".
 )raw_string");
 
   // ---- SparseSolvSolver factory ----

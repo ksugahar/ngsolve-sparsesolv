@@ -93,7 +93,6 @@ W_k = 1 / Σ_e w_k^(e)
 |---------|--------|------|
 | SparseCholesky | `"sparsecholesky"` (既定) | 汎用、NGSolve組込み |
 | PARDISO | `"pardiso"` | Intel MKL使用時 |
-| 密LU | `"dense"` | 小規模問題、デバッグ用 |
 
 SparseCholesky/PARDISOの場合、wirebasket CSR行列をNGSolveの
 `SparseMatrix::InverseMatrix()` に渡す:

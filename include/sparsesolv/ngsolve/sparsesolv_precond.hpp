@@ -254,11 +254,6 @@ public:
         precond_->set_element_info(element_dofs_, dof_types_);
         precond_->set_element_matrices(element_matrices_);
 
-        // Tell BDDC to skip dense coarse inverse if we'll use NGSolve's solver
-        bool use_ngsolve_coarse = (coarse_inverse_type_ != "dense");
-        if (use_ngsolve_coarse)
-            precond_->set_use_external_coarse(true);
-
         // Pass free DOF information to BDDC
         if (this->freedofs_) {
             std::vector<bool> free_dofs(this->height_);
@@ -270,8 +265,7 @@ public:
         precond_->setup(view);
 
         // Build NGSolve sparse direct inverse for wirebasket coarse solve
-        if (use_ngsolve_coarse)
-            build_ngsolve_coarse_inverse();
+        build_ngsolve_coarse_inverse();
     }
 
     sparsesolv::index_t NumWirebasketDofs() const {
@@ -343,7 +337,7 @@ private:
     std::string coarse_inverse_type_;
     shared_ptr<sparsesolv::BDDCPreconditioner<SCAL>> precond_;
 
-    // NGSolve coarse solver (when coarse_inverse_type_ != "dense")
+    // NGSolve coarse solver
     shared_ptr<BaseMatrix> coarse_mat_;  // wirebasket SparseMatrix (must outlive coarse_inv_)
     shared_ptr<BaseMatrix> coarse_inv_;
     mutable shared_ptr<BaseVector> coarse_rhs_;

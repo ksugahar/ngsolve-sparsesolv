@@ -200,7 +200,7 @@ BDDCPreconditioner::setup() [bddc_preconditioner.hpp]
      - COO行列に蓄積
   9. COO → CSR変換
   10. 重みの正規化 (1/sum)
-  11. 粗空間逆行列 (密LUまたは外部ソルバー)
+  11. 粗空間逆行列 (NGSolve SparseCholesky / PARDISO)
 ```
 
 ### Applyフロー (5ステップ)

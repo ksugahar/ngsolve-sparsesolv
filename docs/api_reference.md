@@ -32,7 +32,7 @@ pre = BDDCPreconditioner(a, fes, coarse_inverse="sparsecholesky")
 |------|------|------|
 | `a` | `BilinearForm` | **組立済み**の双線形形式 (`a.Assemble()` 済み) |
 | `fes` | `FESpace` | 有限要素空間 |
-| `coarse_inverse` | `str` | 粗空間ソルバー: `"sparsecholesky"` (既定), `"pardiso"`, `"dense"` |
+| `coarse_inverse` | `str` | 粗空間ソルバー: `"sparsecholesky"` (既定), `"pardiso"` |
 
 **内部処理**:
 1. `fes.CouplingType` からDOF分類 (wirebasket/interface) を取得
