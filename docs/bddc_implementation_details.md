@@ -2,7 +2,7 @@
 
 本ドキュメントでは、SparseSolv が提供する BDDC (Balancing Domain Decomposition by Constraints) 前処理の理論と実装詳細を、**他の開発者が自分のソルバーに BDDC を組み込む**際のリファレンスとなるレベルで解説します。
 
-本実装は NGSolve 組み込み BDDC と**数学的に同一のアルゴリズム**を、独立した pybind11 拡張モジュールとして再実装したものです。
+本実装は NGSolve 組み込み BDDC と**数学的に同一のアルゴリズム** [Dohrmann 2003] を、独立した pybind11 拡張モジュールとして再実装したものです。代数的定式化は [Mandel, Dohrmann, Tezaur 2005] に基づきます。
 要素行列の抽出を Assembly 後に `CalcElementMatrix` で再計算する点のみが異なり、それ以外のセットアップ処理・Apply 操作・並列性能・反復回数・ソルブ時間は NGSolve 組み込み BDDC と同等です。
 
 ---
@@ -524,9 +524,9 @@ if ni == 0:
 | 処理 | SparseSolv BDDC | NGSolve BDDC |
 |------|----------------|-------------|
 | 要素行列取得 | Assembly **後**に `CalcElementMatrix` で再計算 | Assembly **中**にフックで取得（追加コストゼロ） |
-| Schur 補体計算 | 同一（密LU分解） | 同一 |
+| 要素 Schur 補体 | 要素単位の密 LU (`DenseMatrix::invert`) | 同一（要素行列は小規模なので密演算） |
 | 粗行列構築 | COO → CSR 変換 | NGSolve 内部フォーマット |
-| 粗ソルバー | NGSolve `InverseMatrix` 利用 | 同一 |
+| 粗ソルバー | NGSolve `InverseMatrix` (sparsecholesky / pardiso) | 同一 |
 
 要素行列の再計算がセットアップ時間の差の主因であり、**セットアップ時間は約 1.3 倍**です。
 
@@ -673,3 +673,23 @@ BDDC 構築行列の正則化の強さは無関係。
 
 **推奨**: 多重連結領域の HCurl curl-curl 問題には `eps*u*v*dx` 付きの Standard BDDC を使用する。
 ε は十分小さく（例: 1e-6）、解への影響は無視できる。
+
+---
+
+## 参考文献
+
+1. C. R. Dohrmann,
+   "A Preconditioner for Substructuring Based on Constrained Energy Minimization",
+   *SIAM J. Sci. Comput.*, Vol. 25, No. 1, pp. 246–258, 2003.
+   [DOI: 10.1137/S1064827502412887](https://doi.org/10.1137/S1064827502412887)
+
+2. J. Mandel, C. R. Dohrmann, R. Tezaur,
+   "An Algebraic Theory for Primal and Dual Substructuring Methods
+   by Constraints",
+   *Appl. Numer. Math.*, Vol. 54, No. 2, pp. 167–193, 2005.
+   [DOI: 10.1016/j.apnum.2004.09.022](https://doi.org/10.1016/j.apnum.2004.09.022)
+
+3. J. Li, O. B. Widlund,
+   "FETI-DP, BDDC, and Block Cholesky Methods",
+   *Int. J. Numer. Methods Eng.*, Vol. 66, No. 2, pp. 250–271, 2006.
+   [DOI: 10.1002/nme.1553](https://doi.org/10.1002/nme.1553)

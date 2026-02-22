@@ -4,9 +4,10 @@
 
 ### 1.1 概要
 
-BDDCは有限要素法の大規模問題に対する**領域分割前処理**である。
+BDDCは有限要素法の大規模問題に対する**領域分割前処理**である [Dohrmann 2003]。
 メッシュを要素ごとに「サブドメイン」と見なし、
 サブドメイン間の結合を**粗空間 (coarse space)** で処理する。
+代数的定式化は [Mandel, Dohrmann, Tezaur 2005] を参照。
 
 **特徴**:
 - 反復回数がメッシュサイズ *h* にほぼ依存しない (スケーラブル)
@@ -146,7 +147,7 @@ SparseSolvのBDDCはNGSolveの組込みBDDCと**数学的に同一のアルゴ�
 
 ### 2.1 概要
 
-対称正定値行列 *A* に対して近似分解を求める:
+対称正定値行列 *A* に対して近似分解を求める [Meijerink, van der Vorst 1977]:
 
 ```
 A ≈ L * D * L^T
@@ -230,13 +231,14 @@ SGS-MRTR は**対称ガウス・ザイデル (SGS)** 前処理を**MRTR反復法
 **実装ファイル**: `solvers/sgs_mrtr_solver.hpp`
 
 **参考文献**:
-- 圓谷吉宏, 三船泰, 岩下武史, 高橋英治,
+- 圓谷友紀, 三船泰, 岩下武史, 高橋英治,
   "MRTR法に基づく前処理付き反復法の数値実験",
   *電気学会研究会資料*, SA-12-64, 2012.
-- 圓谷吉宏, 三船泰, 岩下武史, 高橋英治,
-  "Minimum Residual-Like Methods for Solving Ax = b with
-  Shift-and-Invert Enhanced Multi-Step MRTR",
-  *IEEE Trans. Magnetics*, Vol. 49, No. 5, pp. 1569-1572, 2013.
+- T. Tsuburaya, Y. Okamoto, K. Fujiwara, S. Sato,
+  "Improvement of the Preconditioned MRTR Method With Eisenstat's Technique
+  in Real Symmetric Sparse Matrices",
+  *IEEE Trans. Magnetics*, Vol. 49, No. 5, pp. 1641-1644, 2013.
+  [DOI: 10.1109/TMAG.2013.2240283](https://doi.org/10.1109/TMAG.2013.2240283)
 
 ### 3.2 DAD変換
 
@@ -434,7 +436,7 @@ ABMCの比較対象は**persistent parallel region付きレベルスケジュー
 
 ### 5.1 概要
 
-対称正定値 (SPD) 行列に対する**前処理付き共役勾配法 (PCG)**。
+対称正定値 (SPD) 行列に対する**前処理付き共役勾配法 (PCG)** [Hestenes, Stiefel 1952]。
 
 **実装ファイル**: `solvers/cg_solver.hpp`
 
@@ -530,3 +532,46 @@ for (index_t k = 0; k < n; ++k) {
 2. 前進代入: L * Y = P (P は置換行列)
 3. 後退代入: U * X = Y → X = A^{-1}
 ```
+
+---
+
+## 参考文献
+
+1. C. R. Dohrmann,
+   "A Preconditioner for Substructuring Based on Constrained Energy Minimization",
+   *SIAM J. Sci. Comput.*, Vol. 25, No. 1, pp. 246–258, 2003.
+   [DOI: 10.1137/S1064827502412887](https://doi.org/10.1137/S1064827502412887)
+
+2. J. Mandel, C. R. Dohrmann, R. Tezaur,
+   "An Algebraic Theory for Primal and Dual Substructuring Methods
+   by Constraints",
+   *Appl. Numer. Math.*, Vol. 54, No. 2, pp. 167–193, 2005.
+   [DOI: 10.1016/j.apnum.2004.09.022](https://doi.org/10.1016/j.apnum.2004.09.022)
+
+3. J. A. Meijerink, H. A. van der Vorst,
+   "An Iterative Solution Method for Linear Systems of Which the
+   Coefficient Matrix is a Symmetric M-Matrix",
+   *Math. Comp.*, Vol. 31, No. 137, pp. 148–162, 1977.
+   [DOI: 10.1090/S0025-5718-1977-0438681-4](https://doi.org/10.1090/S0025-5718-1977-0438681-4)
+
+4. M. R. Hestenes, E. Stiefel,
+   "Methods of Conjugate Gradients for Solving Linear Systems",
+   *J. Research of the National Bureau of Standards*,
+   Vol. 49, No. 6, pp. 409–436, 1952.
+   [DOI: 10.6028/jres.049.044](https://doi.org/10.6028/jres.049.044)
+
+5. T. Iwashita, H. Nakashima, Y. Takahashi,
+   "Algebraic Block Multi-Color Ordering Method for Parallel
+   Multi-Threaded Sparse Triangular Solver in ICCG Method",
+   *Proc. IEEE IPDPS*, 2012.
+   [DOI: 10.1109/IPDPS.2012.51](https://doi.org/10.1109/IPDPS.2012.51)
+
+6. 圓谷友紀, 三船泰, 岩下武史, 高橋英治,
+   "MRTR法に基づく前処理付き反復法の数値実験",
+   *電気学会研究会資料*, SA-12-64, 2012.
+
+7. T. Tsuburaya, Y. Okamoto, K. Fujiwara, S. Sato,
+   "Improvement of the Preconditioned MRTR Method With Eisenstat's Technique
+   in Real Symmetric Sparse Matrices",
+   *IEEE Trans. Magnetics*, Vol. 49, No. 5, pp. 1641–1644, 2013.
+   [DOI: 10.1109/TMAG.2013.2240283](https://doi.org/10.1109/TMAG.2013.2240283)
