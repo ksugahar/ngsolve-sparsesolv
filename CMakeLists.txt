@@ -27,15 +27,32 @@ add_library(SparseSolv::sparsesolv ALIAS sparsesolv)
 option(SPARSESOLV_BUILD_NGSOLVE "Build NGSolve Python extension module" OFF)
 
 if(SPARSESOLV_BUILD_NGSOLVE)
-    if(NOT NGSOLVE_INSTALL_DIR)
-        execute_process(
-            COMMAND python -c "import ngsolve, pathlib; d = pathlib.Path(ngsolve.__file__).parent.parent; print(d.as_posix() + ';' + (d.parent.parent / 'cmake').as_posix() + ';' + (d / 'cmake').as_posix())"
-            OUTPUT_VARIABLE NGSOLVE_HINTS
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-        )
-    endif()
+    # Auto-detect NGSolve and Netgen cmake directories from Python.
+    # pip-installed NGSolve places NGSolveConfig.cmake in ngsolve/cmake/
+    # and NetgenConfig.cmake in netgen/cmake/ (separate packages).
+    execute_process(
+        COMMAND python -c "
+import pathlib
+paths = []
+try:
+    import ngsolve
+    d = pathlib.Path(ngsolve.__file__).parent
+    for p in [d/'cmake', d.parent, d.parent.parent/'cmake']:
+        if p.exists(): paths.append(p.as_posix())
+except ImportError: pass
+try:
+    import netgen
+    p = pathlib.Path(netgen.__file__).parent / 'cmake'
+    if p.exists(): paths.append(p.as_posix())
+except ImportError: pass
+print(';'.join(paths))
+"
+        OUTPUT_VARIABLE _PYTHON_HINTS
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    list(APPEND CMAKE_PREFIX_PATH ${_PYTHON_HINTS} "${NGSOLVE_INSTALL_DIR}")
     find_package(NGSolve CONFIG REQUIRED
-        HINTS ${NGSOLVE_HINTS} "${NGSOLVE_INSTALL_DIR}"
+        HINTS ${_PYTHON_HINTS} "${NGSOLVE_INSTALL_DIR}"
     )
     message(STATUS "Found NGSolve: ${NGSOLVE_INCLUDE_DIRS}")
 
