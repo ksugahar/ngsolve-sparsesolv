@@ -649,10 +649,14 @@ inv = CGSolver(mat=a_pure.mat, pre=pre, maxiter=500, tol=1e-8)
 
 コイル問題のように領域が多重連結（第一ベッチ数 β₁ ≥ 1）の場合、
 `nograds=True` で勾配空間を除去しても **調和形式**（cohomological generators）が
-curl-curl 行列のカーネルに残る。調和形式は curl = 0 だが勾配ではない場であり、
-多重連結領域にのみ存在する。
+curl-curl 行列のカーネルに残る [Hiptmair 2002, Section 4]。
+調和形式は curl = 0 だが勾配ではない場であり、多重連結領域にのみ存在する。
+Hodge 分解 H(curl) = grad(H¹) ⊕ H_harm ⊕ curl(H(curl)) において、
+`nograds=True` は grad(H¹) を除去するが H_harm（次元 = β₁）が残る。
 
-このカーネルと BDDC 粗空間のミスマッチにより、メッシュ細分化で収束しなくなる:
+CG 行列 A が特異（カーネルを持つ）場合、前処理付き CG は発散しうる
+[Kaasschieter 1988]。Shifted-BDDC では構築行列 A+εM は正則だが、
+CG の系行列 A 自体にカーネルがあるため、ε の値に関わらず収束しない:
 
 | メッシュ (トーラスコイル) | DOFs (p=2) | Shifted-BDDC | Standard BDDC |
 |--------------------------|-----------|--------------|---------------|
@@ -660,8 +664,8 @@ curl-curl 行列のカーネルに残る。調和形式は curl = 0 だが勾配
 | maxh=0.03 | 82K | **214** 反復 | 26 OK |
 | maxh=0.025 | 111K | **不収束** (500反復) | 31 OK |
 
-ε の値を変えても (1e-6 〜 1.0) 改善しない。CG 行列にカーネルがあることが本質的原因であり、
-BDDC 構築行列の正則化の強さは無関係。
+ε の値を変えても (1e-6 〜 1.0) 改善しない。
+CG 行列にカーネルがあることが本質的原因であり、BDDC 構築行列の正則化の強さは無関係。
 
 ### 適用可能性
 
@@ -692,3 +696,15 @@ BDDC 構築行列の正則化の強さは無関係。
    "FETI-DP, BDDC, and Block Cholesky Methods",
    *Int. J. Numer. Methods Eng.*, Vol. 66, No. 2, pp. 250–271, 2006.
    [DOI: 10.1002/nme.1553](https://doi.org/10.1002/nme.1553)
+
+4. R. Hiptmair,
+   "Finite Elements in Computational Electromagnetism",
+   *Acta Numerica*, Vol. 11, pp. 237–339, 2002.
+   [DOI: 10.1017/S0962492902000041](https://doi.org/10.1017/S0962492902000041)
+   — HCurl 有限要素の包括的レビュー。Section 4 で de Rham cohomology と Hodge 分解を解説。多重連結領域での調和形式の存在を理論的に示す。
+
+5. E. F. Kaasschieter,
+   "Preconditioned Conjugate Gradients for Solving Singular Systems",
+   *J. Comput. Appl. Math.*, Vol. 24, No. 1–2, pp. 265–275, 1988.
+   [DOI: 10.1016/0377-0427(88)90358-5](https://doi.org/10.1016/0377-0427(88)90358-5)
+   — 特異系に対する前処理付き CG の収束解析。A が特異で b ∉ R(A) のとき PCG が発散することを示す。

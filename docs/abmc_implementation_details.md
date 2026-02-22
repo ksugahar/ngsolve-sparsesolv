@@ -125,7 +125,10 @@ Phase 2: Forbidden-Color-Set による貪欲彩色
 ```
 
 **重要**: `target_colors` は**下限**であり保証値ではない。実際の色数は:
-$$\text{num\_colors} \geq \max(\text{target\_colors},\ 1 + \max_i |\{j < i : (i,j) \in E\}|)$$
+
+```
+num_colors >= max(target_colors, 1 + max_i |{j < i : (i,j) ∈ E}|)
+```
 
 Phase 2 でさらに増加する可能性がある（Phase 1 は下三角次数のみで計算するが、彩色順序によっては追加の色が必要になる）。
 
@@ -546,6 +549,12 @@ RCM は帯域幅縮小によりABMC彩色の色数を減らす可能性がある
 **課題**: `color_graph()` の出力パラメータと `build_row_ordering()` のパラメータに未使用のものがあった。
 
 **対応**: `color_graph()` から不要な出力パラメータを削除。`build_row_ordering()` のシグネチャを簡素化。
+
+---
+
+## 謝辞
+
+ABMC オーダリングの実装は、圓谷友紀氏（福岡大学）から提供されたコード [JP-MARs/SparseSolv](https://github.com/JP-MARs/SparseSolv) に基づいている。このコードは岩下武史氏（京都大学）の研究グループにおける ABMC 手法 [1] および SGS-MRTR 前処理の研究成果を実装したものであり、本リポジトリではヘッダオンリー構成への再構成、NGSolve 連携、auto-shift IC、BDDC 前処理の追加など、独自の拡張を施している。
 
 ---
 
