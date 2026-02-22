@@ -114,54 +114,41 @@ All parallel operations are abstracted via `core/parallel.hpp` with compile-time
 
 ## Installation
 
-### Prerequisites
+### From Pre-built Wheel (Recommended)
 
-- NGSolve installed (from source or pip) with CMake config files
-- CMake 3.16+
-- C++17 compiler (MSVC 2022, GCC 10+, Clang 10+)
-- pybind11 (fetched automatically by CMake if not found)
+Download the `.whl` file for your platform from the
+[Releases](https://github.com/ksugahar/ngsolve-sparsesolv/releases) page, then install:
 
-### Step 1: Build
+```bash
+pip install sparsesolv_ngsolve-2.1.0-cp312-cp312-win_amd64.whl
+```
+
+Replace the filename with the one matching your Python version and OS.
+
+### From Source
+
+Requires [Git for Windows](https://gitforwindows.org/) (or equivalent), CMake 3.16+,
+a C++17 compiler, and NGSolve (`pip install ngsolve` or built from source).
+
+```bash
+pip install git+https://github.com/ksugahar/ngsolve-sparsesolv.git
+```
+
+Or clone and build locally:
 
 ```bash
 git clone https://github.com/ksugahar/ngsolve-sparsesolv.git
 cd ngsolve-sparsesolv
-mkdir build && cd build
-
-# Point to your NGSolve install directory containing cmake/ config files
-cmake .. -DSPARSESOLV_BUILD_NGSOLVE=ON \
-         -DNGSOLVE_INSTALL_DIR=/path/to/ngsolve/install/cmake
-
-cmake --build . --config Release
+pip install .
 ```
 
-This produces `sparsesolv_ngsolve.pyd` (Windows) or `sparsesolv_ngsolve.so` (Linux/macOS).
+For development builds (editable install, manual CMake), see [docs/development.md](docs/development.md).
 
-### Step 2: Install
-
-Copy the built module to your Python path. For example:
+### Verify
 
 ```bash
-# Find your NGSolve site-packages
-SITE_PACKAGES=$(python -c "import ngsolve, pathlib; print(pathlib.Path(ngsolve.__file__).parent.parent)")
-
-# Create package directory and copy
-mkdir -p "$SITE_PACKAGES/sparsesolv_ngsolve"
-cp build/Release/sparsesolv_ngsolve*.pyd "$SITE_PACKAGES/sparsesolv_ngsolve/"  # Windows
-# cp build/sparsesolv_ngsolve*.so "$SITE_PACKAGES/sparsesolv_ngsolve/"         # Linux/macOS
-echo "from .sparsesolv_ngsolve import *" > "$SITE_PACKAGES/sparsesolv_ngsolve/__init__.py"
-cp sparsesolv_ngsolve.pyi "$SITE_PACKAGES/sparsesolv_ngsolve/__init__.pyi"
-cp py.typed "$SITE_PACKAGES/sparsesolv_ngsolve/"
+python -c "from sparsesolv_ngsolve import SparseSolvSolver; print('OK')"
 ```
-
-### Step 3: Verify
-
-```bash
-python -c "import ngsolve; from sparsesolv_ngsolve import SparseSolvSolver; print('OK')"
-```
-
-Note: `import ngsolve` must be called before `import sparsesolv_ngsolve` to ensure
-NGSolve's shared libraries are loaded.
 
 ## NGSolve Usage
 
