@@ -42,7 +42,7 @@ struct Version {
 
 /// Convenience function: Solve Ax=b using ICCG
 template<typename Scalar = double>
-inline SolverResult solve_iccg(
+[[nodiscard]] inline SolverResult solve_iccg(
     const SparseMatrixView<Scalar>& A,
     const Scalar* b,
     Scalar* x,
@@ -107,7 +107,7 @@ inline SolverResult solve_iccg(
 
 /// Convenience function: Solve Ax=b using ICCG with std::vector
 template<typename Scalar = double>
-inline SolverResult solve_iccg(
+[[nodiscard]] inline SolverResult solve_iccg(
     const SparseMatrixView<Scalar>& A,
     const std::vector<Scalar>& b,
     std::vector<Scalar>& x,
@@ -121,7 +121,7 @@ inline SolverResult solve_iccg(
 
 /// Convenience function: Solve Ax=b using SGS-MRTR
 template<typename Scalar = double>
-inline SolverResult solve_sgsmrtr(
+[[nodiscard]] inline SolverResult solve_sgsmrtr(
     const SparseMatrixView<Scalar>& A,
     const Scalar* b,
     Scalar* x,
@@ -138,7 +138,7 @@ inline SolverResult solve_sgsmrtr(
 
 /// Convenience function: Solve Ax=b using SGS-MRTR with std::vector
 template<typename Scalar = double>
-inline SolverResult solve_sgsmrtr(
+[[nodiscard]] inline SolverResult solve_sgsmrtr(
     const SparseMatrixView<Scalar>& A,
     const std::vector<Scalar>& b,
     std::vector<Scalar>& x,
