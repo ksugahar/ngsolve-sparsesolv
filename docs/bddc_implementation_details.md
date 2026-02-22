@@ -41,7 +41,7 @@ $$ S_{WW} = \sum_{e} R_W^{(e)T} S_{WW}^{(e)} R_W^{(e)} $$
 
 ### Step 2.1: FEMフレームワークからの情報抽出
 
-BDDC の構築に必要な入力データは以下の4点のみです。FEMフレームワーク依存の部分はここだけであり、これらを用意できれば任意のソルバーに組み込めます。
+BDDC の構築に必要な入力データは以下の4点です。加えて、粗空間ソルバーをコールバックとして外部から注入する必要があります（本モジュールでは NGSolve の SparseCholesky / PARDISO を使用）。
 
 #### 必要な入力データ一覧
 
@@ -561,18 +561,18 @@ Apply フェーズは両実装とも CSR SpMV ベースであり、計算量・�
 | `core/sparse_matrix_coo.hpp` | COO 蓄積・CSR 変換 | なし |
 | `core/sparse_matrix_csr.hpp` | CSR 格納・SpMV | `core/parallel.hpp` |
 | `core/dense_matrix.hpp` | 密行列演算（LU逆行列・乗算） | なし |
-| `preconditioners/bddc_preconditioner.hpp` | **BDDC コア**（FEM非依存） | 上記3ファイル |
+| `preconditioners/bddc_preconditioner.hpp` | **BDDC コア**（粗ソルバーは外部コールバック） | 上記3ファイル |
 | `ngsolve/sparsesolv_precond.hpp` | NGSolve BaseMatrix ラッパー | BDDC コア + NGSolve |
 | `ngsolve/sparsesolv_python_export.hpp` | pybind11 バインディング + 要素抽出 | ラッパー + pybind11 |
 
-BDDC コア (`bddc_preconditioner.hpp`) は NGSolve に一切依存しません。入力データ（要素DOFリスト・要素行列・DOF分類・自由度マスク）を用意できれば、任意の FEM フレームワークで利用可能です。
+BDDC コア (`bddc_preconditioner.hpp`) の要素 Schur 補体計算は NGSolve に依存しません。ただし、粗空間ソルバーはコールバック (`std::function<void(const Scalar*, Scalar*)>`) で外部から注入する設計であり、本モジュールでは NGSolve の疎直接法 (SparseCholesky / PARDISO) を利用しています。
 
 ---
 
 ## 7. この実装の特性
 
 1.  **NGSolve BDDC と数学的に同一**: 反復数・精度が完全一致することを確認済み。
-2.  **FEM非依存コア**: BDDC コアは NGSolve に依存せず、入力データのみで動作。
+2.  **コア部分の FEM 非依存**: 要素 Schur 補体・Harmonic Extension の計算は NGSolve に依存しない。粗空間ソルバーは NGSolve の疎直接法をコールバックで利用。
 3.  **要素完全独立並列**: セットアップの要素ループは `IterateElements` で並列化。Apply は CSR SpMV で行並列化。
 4.  **Shifted-BDDC**: 構築行列と系行列を分離可能（ただし単連結領域のみ。後述）。
 5.  **複素数対応**: テンプレートにより `double` / `complex<double>` の両方に対応。
