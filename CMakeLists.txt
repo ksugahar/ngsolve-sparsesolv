@@ -99,6 +99,7 @@ install(TARGETS sparsesolv
 install(DIRECTORY include/sparsesolv
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     FILES_MATCHING PATTERN "*.hpp"
+    PATTERN "ngsolve" EXCLUDE
 )
 
 install(EXPORT SparseSolvTargets
