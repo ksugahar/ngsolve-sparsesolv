@@ -133,8 +133,14 @@ public:
             compute_scaling_factors();
         }
 
-        // Compute IC factorization (with auto-shift if enabled)
-        compute_ic_factorization();
+        // Compute IC factorization
+        // ABMC path: color-parallel factorization (auto_shift not supported)
+        // Sequential path: standard factorization (with auto-shift if enabled)
+        if (config_.use_abmc && abmc_schedule_.is_built() && !config_.auto_shift) {
+            compute_ic_factorization_abmc();
+        } else {
+            compute_ic_factorization();
+        }
 
         // Compute transpose L^T
         compute_transpose();
@@ -803,6 +809,107 @@ private:
                     inv_diag_[i] = Scalar(1) / safe_val;
                 }
             }
+        }
+
+        actual_shift_ = shift;
+    }
+
+    /**
+     * @brief Compute IC factorization with ABMC color-parallel scheduling
+     *
+     * Same numerical result as compute_ic_factorization(), but processes
+     * blocks within each color in parallel. Safe because same-color blocks
+     * have no lower-triangular dependencies between them.
+     *
+     * Note: auto_shift is not supported in this path (caller must check).
+     */
+    void compute_ic_factorization_abmc() {
+        const index_t n = size_;
+        inv_diag_.resize(n);
+
+        const double shift = shift_parameter_;
+
+        // Apply diagonal scaling if needed (same as sequential path)
+        if (config_.diagonal_scaling) {
+            apply_scaling_to_L();
+        }
+
+        const index_t nc = abmc_schedule_.num_colors();
+        for (index_t c = 0; c < nc; ++c) {
+            const index_t blk_begin = abmc_schedule_.color_offsets[c];
+            const index_t blk_end = abmc_schedule_.color_offsets[c + 1];
+            const index_t num_blocks = blk_end - blk_begin;
+
+            // Same-color blocks have no lower-triangular connections,
+            // so their IC factorization rows are fully independent.
+            parallel_for(num_blocks, [&](index_t bidx) {
+                const index_t blk = abmc_schedule_.color_blocks[blk_begin + bidx];
+                const index_t row_begin = abmc_schedule_.block_offsets[blk];
+                const index_t row_end = abmc_schedule_.block_offsets[blk + 1];
+
+                for (index_t i = row_begin; i < row_end; ++i) {
+                    const index_t row_start = L_.row_ptr[i];
+                    const index_t l_row_end = L_.row_ptr[i + 1];
+
+                    // Process off-diagonal elements L(i, j) where j < i
+                    for (index_t kk = row_start; kk < l_row_end - 1; ++kk) {
+                        const index_t j = L_.col_idx[kk];
+                        if (j >= i) break;
+
+                        Scalar s = L_.values[kk];
+
+                        // s -= sum over k < j of: L(i,k) * L(j,k) * D^{-1}(k)
+                        const index_t j_start = L_.row_ptr[j];
+                        const index_t j_end = L_.row_ptr[j + 1];
+
+                        for (index_t ii = row_start; ii < kk; ++ii) {
+                            const index_t k = L_.col_idx[ii];
+                            if (k >= j) break;
+
+                            for (index_t jj = j_start; jj < j_end; ++jj) {
+                                if (L_.col_idx[jj] == k) {
+                                    s -= L_.values[ii] * L_.values[jj] * inv_diag_[k];
+                                    break;
+                                } else if (L_.col_idx[jj] > k) {
+                                    break;
+                                }
+                            }
+                        }
+
+                        L_.values[kk] = s;
+                    }
+
+                    // Process diagonal element L(i, i)
+                    const index_t diag_pos = l_row_end - 1;
+                    if (L_.col_idx[diag_pos] != i) {
+                        throw std::runtime_error(
+                            "IC decomposition failed: missing diagonal at row "
+                            + std::to_string(i));
+                    }
+
+                    Scalar s = L_.values[diag_pos] * static_cast<Scalar>(shift);
+
+                    // s -= sum over k < i of: L(i,k)^2 * D^{-1}(k)
+                    for (index_t kk = row_start; kk < diag_pos; ++kk) {
+                        const index_t k = L_.col_idx[kk];
+                        if (k >= i) break;
+                        s -= L_.values[kk] * L_.values[kk] * inv_diag_[k];
+                    }
+
+                    L_.values[diag_pos] = s;
+
+                    // Store D^{-1}(i) = 1/s
+                    double abs_s = std::abs(s);
+                    if (abs_s > config_.zero_diagonal_replacement) {
+                        inv_diag_[i] = Scalar(1) / s;
+                    } else {
+                        Scalar safe_val = static_cast<Scalar>(
+                            config_.zero_diagonal_replacement);
+                        L_.values[diag_pos] = safe_val;
+                        inv_diag_[i] = Scalar(1) / safe_val;
+                    }
+                }
+            });
         }
 
         actual_shift_ = shift;
