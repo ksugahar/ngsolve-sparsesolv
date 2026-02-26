@@ -247,20 +247,17 @@ def SGSPreconditioner(
 def BDDCPreconditioner(
     a: BilinearForm,
     fes: FESpace,
-    coarse_inverse: str = "sparsecholesky",
 ) -> BDDCPreconditionerD | BDDCPreconditionerC:
     """BDDC (Balancing Domain Decomposition by Constraints) Preconditioner.
 
     Extracts element matrices from BilinearForm and builds element-by-element
-    BDDC with wirebasket coarse space. Produces mesh-independent iteration counts.
+    BDDC with wirebasket coarse space. Uses MKL PARDISO for the coarse solve.
 
     Auto-dispatches to real/complex based on ``a.mat.IsComplex()``.
 
     Args:
         a: Assembled BilinearForm.
         fes: Finite element space (for DOF classification).
-        coarse_inverse: Coarse solver type —
-            ``"sparsecholesky"`` (default), ``"pardiso"``, or ``"dense"``.
     """
     ...
 

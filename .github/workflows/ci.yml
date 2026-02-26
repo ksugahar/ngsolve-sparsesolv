@@ -19,7 +19,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install ngsolve pytest scikit-build-core pybind11
+        run: pip install ngsolve pytest scikit-build-core pybind11 mkl-devel
 
       - name: Build and install module
         run: pip install . -v

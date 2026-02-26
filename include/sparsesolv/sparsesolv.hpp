@@ -116,7 +116,8 @@ template<typename Scalar = double>
     if (x.size() != b.size()) {
         x.resize(b.size());
     }
-    return solve_iccg(A, b.data(), x.data(), static_cast<index_t>(b.size()), config);
+    return solve_iccg(A, b.data(), x.data(), static_cast<index_t>(b.size()),
+                      config);
 }
 
 /// Convenience function: Solve Ax=b using SGS-MRTR

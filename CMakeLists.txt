@@ -56,14 +56,48 @@ print(';'.join(paths))
     )
     message(STATUS "Found NGSolve: ${NGSOLVE_INCLUDE_DIRS}")
 
+    # MKL PARDISO (required for BDDC coarse solver)
+    # Use LP64 interface (MKL_INT = int, 32-bit) to match sparsesolv::index_t
+    set(MKL_INTERFACE_FULL intel_lp64)
+    # Auto-detect MKL cmake config: oneAPI toolkit, pip mkl-devel, or pip mkl
+    execute_process(
+        COMMAND python -c "
+import pathlib, sys
+paths = []
+# pip-installed mkl-devel: sys.prefix/Library/lib/cmake/mkl (Windows)
+prefix = pathlib.Path(sys.prefix)
+for p in [prefix/'Library'/'lib'/'cmake'/'mkl',
+          prefix/'lib'/'cmake'/'mkl']:
+    if p.exists(): paths.append(p.as_posix())
+# import mkl fallback
+try:
+    import mkl
+    d = pathlib.Path(mkl.__file__).parent
+    for p in [d/'lib'/'cmake'/'mkl']:
+        if p.exists(): paths.append(p.as_posix())
+except ImportError: pass
+if paths: print(paths[0])
+"
+        OUTPUT_VARIABLE _MKL_HINTS
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    find_package(MKL CONFIG REQUIRED
+        HINTS ${_MKL_HINTS}
+              "C:/Program Files (x86)/Intel/oneAPI/mkl/latest/lib/cmake/mkl")
+    message(STATUS "Found MKL: ${MKL_ROOT}")
+
     add_ngsolve_python_module(sparsesolv_ngsolve ngsolve/python_module.cpp)
     target_include_directories(sparsesolv_ngsolve PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
     target_compile_features(sparsesolv_ngsolve PRIVATE cxx_std_17)
+    target_link_libraries(sparsesolv_ngsolve PRIVATE MKL::MKL)
 
     # Use NGSolve TaskManager for parallel_for/parallel_reduce_sum
     target_compile_definitions(sparsesolv_ngsolve PRIVATE SPARSESOLV_USE_NGSOLVE_TASKMANAGER)
+
+    # MKL BLAS/LAPACK for dense matrix operations in BDDC
+    target_compile_definitions(sparsesolv_ngsolve PRIVATE SPARSESOLV_USE_MKL)
 
     # Install the Python module
     if(SKBUILD)

@@ -96,6 +96,21 @@ inline T parallel_reduce_sum(index_t n, FUNC f, T init = T(0)) {
 }
 
 /**
+ * @brief Get the current thread index within a parallel region
+ *
+ * Returns a value in [0, get_num_threads()) that identifies the calling thread.
+ */
+inline int get_thread_id() {
+#ifdef SPARSESOLV_USE_NGSOLVE_TASKMANAGER
+    return ngcore::TaskManager::GetThreadId();
+#elif defined(_OPENMP)
+    return omp_get_thread_num();
+#else
+    return 0;
+#endif
+}
+
+/**
  * @brief Get the number of available parallel threads
  */
 inline int get_num_threads() {

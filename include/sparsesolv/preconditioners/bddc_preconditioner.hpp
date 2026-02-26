@@ -11,12 +11,14 @@
 #include "../core/preconditioner.hpp"
 #include "../core/dense_matrix.hpp"
 #include "../core/sparse_matrix_view.hpp"
-#include "../core/sparse_matrix_coo.hpp"
 #include "../core/sparse_matrix_csr.hpp"
+#include "../core/sparse_matrix_csr_builder.hpp"
+#include "../core/parallel.hpp"
+#include "../direct/pardiso_solver.hpp"
 #include <vector>
-#include <functional>
 #include <algorithm>
 #include <cmath>
+#include <memory>
 
 namespace sparsesolv {
 
@@ -46,14 +48,6 @@ public:
         element_matrices_ = std::move(element_matrices);
     }
 
-    /// Set external coarse solver: void(const Scalar* rhs, Scalar* sol) on compact wb vectors
-    void set_coarse_solver(std::function<void(const Scalar*, Scalar*)> solver) {
-        coarse_solver_ = std::move(solver);
-    }
-
-    /// Access wirebasket CSR matrix (available after setup, compact n_wb x n_wb)
-    const SparseMatrixCSR<Scalar>& wirebasket_csr() const { return wb_csr_; }
-
     /// Access wirebasket DOF mapping (compact_idx -> global_dof)
     const std::vector<index_t>& wirebasket_dofs() const { return wb_dofs_; }
 
@@ -61,6 +55,7 @@ public:
         n_total_ = A.rows();
         build_dof_maps();
         setup_element_bddc();
+        build_pardiso_coarse_solver();
         this->is_setup_ = true;
     }
 
@@ -74,8 +69,6 @@ public:
     index_t num_interface_dofs() const { return n_if_; }
 
 private:
-    std::function<void(const Scalar*, Scalar*)> coarse_solver_;
-
     // Input data
     std::vector<std::vector<index_t>> element_dofs_;
     std::vector<DOFType> dof_types_;
@@ -97,6 +90,7 @@ private:
     SparseMatrixCSR<Scalar> het_csr_;      // harmonic extension transpose (full space, wb->if)
     SparseMatrixCSR<Scalar> is_csr_;       // inner solve (full space, if->if)
     SparseMatrixCSR<Scalar> wb_csr_;       // wirebasket Schur complement (compact n_wb x n_wb)
+    std::unique_ptr<PardisoSolver<Scalar>> pardiso_solver_;  // coarse solver
     std::vector<double> weight_;           // DOF weights
 
     // Work vectors for apply (mutable for const apply)
@@ -129,23 +123,55 @@ private:
     }
 
     void setup_element_bddc() {
-        // Initialize COO accumulators
-        SparseMatrixCOO<Scalar> he_coo(n_total_, n_total_);
-        SparseMatrixCOO<Scalar> het_coo(n_total_, n_total_);
-        SparseMatrixCOO<Scalar> is_coo(n_total_, n_total_);
-        SparseMatrixCOO<Scalar> wb_coo(n_wb_, n_wb_);
+        int nthreads = get_num_threads();
+        index_t n_elements = static_cast<index_t>(element_dofs_.size());
 
-        weight_.assign(n_total_, 0.0);
-
-        for (size_t e = 0; e < element_dofs_.size(); ++e) {
-            process_element(e, he_coo, het_coo, is_coo, wb_coo);
+        // Thread-local CSR builders and weight vectors
+        std::vector<SparseMatrixCSRBuilder<Scalar>> tl_he, tl_het, tl_is, tl_wb;
+        std::vector<std::vector<double>> tl_weight;
+        tl_he.reserve(nthreads);
+        tl_het.reserve(nthreads);
+        tl_is.reserve(nthreads);
+        tl_wb.reserve(nthreads);
+        tl_weight.reserve(nthreads);
+        for (int t = 0; t < nthreads; ++t) {
+            tl_he.emplace_back(n_total_, n_total_);
+            tl_het.emplace_back(n_total_, n_total_);
+            tl_is.emplace_back(n_total_, n_total_);
+            tl_wb.emplace_back(n_wb_, n_wb_);
+            tl_weight.emplace_back(n_total_, 0.0);
         }
 
-        // Convert COO to CSR (sums duplicate entries)
-        he_csr_ = he_coo.to_csr();
-        het_csr_ = het_coo.to_csr();
-        is_csr_ = is_coo.to_csr();
-        wb_csr_ = wb_coo.to_csr();
+        // Parallel element processing
+        parallel_for(n_elements, [&](index_t e) {
+            int tid = get_thread_id();
+            process_element(e, tl_he[tid], tl_het[tid], tl_is[tid],
+                            tl_wb[tid], tl_weight[tid]);
+        });
+
+        // Merge thread-local builders
+        SparseMatrixCSRBuilder<Scalar> he_bld(n_total_, n_total_);
+        SparseMatrixCSRBuilder<Scalar> het_bld(n_total_, n_total_);
+        SparseMatrixCSRBuilder<Scalar> is_bld(n_total_, n_total_);
+        SparseMatrixCSRBuilder<Scalar> wb_bld(n_wb_, n_wb_);
+        for (int t = 0; t < nthreads; ++t) {
+            he_bld.merge_from(std::move(tl_he[t]));
+            het_bld.merge_from(std::move(tl_het[t]));
+            is_bld.merge_from(std::move(tl_is[t]));
+            wb_bld.merge_from(std::move(tl_wb[t]));
+        }
+
+        // Merge thread-local weights
+        weight_.assign(n_total_, 0.0);
+        for (int t = 0; t < nthreads; ++t)
+            for (index_t i = 0; i < n_total_; ++i)
+                weight_[i] += tl_weight[t][i];
+
+        // Build CSR directly (per-row sort + dedup, no global sort)
+        he_csr_ = he_bld.build();
+        het_csr_ = het_bld.build();
+        is_csr_ = is_bld.build();
+        wb_csr_ = wb_bld.build();
 
         finalize_weights();
 
@@ -161,10 +187,11 @@ private:
     }
 
     void process_element(size_t e,
-                         SparseMatrixCOO<Scalar>& he_coo,
-                         SparseMatrixCOO<Scalar>& het_coo,
-                         SparseMatrixCOO<Scalar>& is_coo,
-                         SparseMatrixCOO<Scalar>& wb_coo) {
+                         SparseMatrixCSRBuilder<Scalar>& he_bld,
+                         SparseMatrixCSRBuilder<Scalar>& het_bld,
+                         SparseMatrixCSRBuilder<Scalar>& is_bld,
+                         SparseMatrixCSRBuilder<Scalar>& wb_bld,
+                         std::vector<double>& weight) {
         const auto& el_dofs = element_dofs_[e];
         const auto& elmat = element_matrices_[e];
         index_t nel = static_cast<index_t>(el_dofs.size());
@@ -242,20 +269,20 @@ private:
 
             // Accumulate global weight for interface DOFs
             for (index_t k = 0; k < ni; ++k)
-                weight_[el_dofs[local_if[k]]] += elem_weight[k];
+                weight[el_dofs[local_if[k]]] += elem_weight[k];
 
-            // Map to global DOF indices and accumulate into COO
+            // Map to global DOF indices and accumulate into CSR builder
             std::vector<index_t> g_if(ni), g_wb(nw);
             for (index_t k = 0; k < ni; ++k) g_if[k] = el_dofs[local_if[k]];
             for (index_t k = 0; k < nw; ++k) g_wb[k] = el_dofs[local_wb[k]];
 
-            he_coo.add_submatrix(g_if.data(), ni, g_wb.data(), nw, harm_ext);
-            het_coo.add_submatrix(g_wb.data(), nw, g_if.data(), ni, harm_ext_t);
-            is_coo.add_submatrix(g_if.data(), ni, g_if.data(), ni, K_ii_inv);
+            he_bld.add_submatrix(g_if.data(), ni, g_wb.data(), nw, harm_ext);
+            het_bld.add_submatrix(g_wb.data(), nw, g_if.data(), ni, harm_ext_t);
+            is_bld.add_submatrix(g_if.data(), ni, g_if.data(), ni, K_ii_inv);
 
             std::vector<index_t> c_wb(nw);
             for (index_t k = 0; k < nw; ++k) c_wb[k] = wb_map_[g_wb[k]];
-            wb_coo.add_submatrix(c_wb.data(), nw, c_wb.data(), nw, schur);
+            wb_bld.add_submatrix(c_wb.data(), nw, c_wb.data(), nw, schur);
         } else {
             // No interface DOFs: add K_ww directly to wirebasket
             std::vector<index_t> g_wb(nw), c_wb(nw);
@@ -263,7 +290,7 @@ private:
                 g_wb[k] = el_dofs[local_wb[k]];
                 c_wb[k] = wb_map_[g_wb[k]];
             }
-            wb_coo.add_submatrix(c_wb.data(), nw, c_wb.data(), nw, schur);
+            wb_bld.add_submatrix(c_wb.data(), nw, c_wb.data(), nw, schur);
         }
     }
 
@@ -297,35 +324,63 @@ private:
         }
     }
 
+    void build_pardiso_coarse_solver() {
+        pardiso_solver_ = std::make_unique<PardisoSolver<Scalar>>();
+        pardiso_solver_->factorize(
+            n_wb_,
+            wb_csr_.row_ptr.data(),
+            wb_csr_.col_idx.data(),
+            wb_csr_.values.data());
+    }
+
     /// Apply BDDC: y = (I + he) * (S_wb^{-1} * (I + he^T) * x + is * x)
+    /// Fused SpMV-add with empty row skip: het has wb rows only, he/is have if rows only.
     void apply_element_bddc(const Scalar* x, Scalar* y, index_t size) const {
         // Step 1: y = x
         std::copy(x, x + size, y);
 
-        // Step 2: y += het * x
-        het_csr_.multiply(x, work1_.data());
-        for (index_t i = 0; i < size; ++i)
-            y[i] += work1_[i];
+        // Step 2: y += het * x (wirebasket rows only — het has entries in wb rows)
+        parallel_for(n_wb_, [&](index_t k) {
+            index_t i = wb_dofs_[k];
+            Scalar sum = Scalar(0);
+            for (index_t p = het_csr_.row_ptr[i]; p < het_csr_.row_ptr[i + 1]; ++p)
+                sum += het_csr_.values[p] * x[het_csr_.col_idx[p]];
+            y[i] += sum;
+        });
 
         // Step 3: Coarse solve (wirebasket inverse)
         for (index_t k = 0; k < n_wb_; ++k)
             wb_work1_[k] = y[wb_dofs_[k]];
 
-        coarse_solver_(wb_work1_.data(), wb_work2_.data());
+        pardiso_solver_->solve(wb_work1_.data(), wb_work2_.data());
 
         std::fill(work1_.begin(), work1_.end(), Scalar(0));
         for (index_t k = 0; k < n_wb_; ++k)
             work1_[wb_dofs_[k]] = wb_work2_[k];
 
-        // Step 4: tmp += inner_solve * x
-        is_csr_.multiply(x, work2_.data());
-        for (index_t i = 0; i < size; ++i)
-            work1_[i] += work2_[i];
+        // Step 4: work1_ += is * x (interface rows only — is has entries in if rows)
+        parallel_for(n_if_, [&](index_t k) {
+            index_t i = if_dofs_[k];
+            Scalar sum = Scalar(0);
+            for (index_t p = is_csr_.row_ptr[i]; p < is_csr_.row_ptr[i + 1]; ++p)
+                sum += is_csr_.values[p] * x[is_csr_.col_idx[p]];
+            work1_[i] += sum;
+        });
 
-        // Step 5: y = tmp + he * tmp
-        he_csr_.multiply(work1_.data(), work2_.data());
-        for (index_t i = 0; i < size; ++i)
-            y[i] = work1_[i] + work2_[i];
+        // Step 5: y = work1_ + he * work1_
+        // Wirebasket rows: he has no entries, so y = work1_ directly
+        parallel_for(n_wb_, [&](index_t k) {
+            index_t i = wb_dofs_[k];
+            y[i] = work1_[i];
+        });
+        // Interface rows: fused SpMV-add (he has entries in if rows only)
+        parallel_for(n_if_, [&](index_t k) {
+            index_t i = if_dofs_[k];
+            Scalar sum = Scalar(0);
+            for (index_t p = he_csr_.row_ptr[i]; p < he_csr_.row_ptr[i + 1]; ++p)
+                sum += he_csr_.values[p] * work1_[he_csr_.col_idx[p]];
+            y[i] = work1_[i] + sum;
+        });
     }
 };
 

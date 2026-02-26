@@ -89,19 +89,18 @@ W_k = 1 / Σ_e w_k^(e)
 
 全要素のSchur補体を組み立てた **wirebasket行列** S_global を直接法で解く。
 
-| ソルバー | 設定値 | 用途 |
-|---------|--------|------|
-| SparseCholesky | `"sparsecholesky"` (既定) | 汎用、NGSolve組込み |
-| PARDISO | `"pardiso"` | Intel MKL使用時 |
-
-SparseCholesky/PARDISOの場合、wirebasket CSR行列をNGSolveの
-`SparseMatrix::InverseMatrix()` に渡す:
+**MKL PARDISO** を直接使用する (NGSolve非依存)。
+wirebasket CSR行列 (0-based, full symmetric) から上三角部分を自動抽出し、
+PARDISO の分析 (phase 11) → 数値分解 (phase 22) → 求解 (phase 33) を実行する。
 
 ```cpp
-// sparsesolv_precond.hpp: build_ngsolve_coarse_inverse()
-sp_mat->SetInverseType(coarse_inverse_type_);  // "sparsecholesky" or "pardiso"
-coarse_inv_ = sp_mat->InverseMatrix();
+// bddc_preconditioner.hpp: build_pardiso_coarse_solver()
+pardiso_solver_ = std::make_unique<PardisoSolver<Scalar>>();
+pardiso_solver_->factorize(n_wb_, wb_csr_.row_ptr.data(),
+                           wb_csr_.col_idx.data(), wb_csr_.values.data());
 ```
+
+**実装ファイル**: `direct/pardiso_solver.hpp` (MKL PARDISO wrapper, header-only)
 
 ### 1.6 Applyアルゴリズム (5ステップ)
 
@@ -531,6 +530,51 @@ for (index_t k = 0; k < n; ++k) {
 2. 前進代入: L * Y = P (P は置換行列)
 3. 後退代入: U * X = Y → X = A^{-1}
 ```
+
+---
+
+## 7. コード由来と貢献者
+
+ngsolve-sparsesolvは複数の研究者のコードを統合・拡張したものである。
+
+### 7.1 由来の対応表
+
+| コンポーネント | 由来 | 原著者 | 元ファイル (JP-MARs/SparseSolv) |
+|---|---|---|---|
+| CG反復ソルバ | 佐藤 | 佐藤 (tsato) | `MatSolvers_ICCG.cpp` |
+| IC分解・前後進代入（逐次） | 佐藤 | 佐藤 (tsato) | `MatSolvers_ICCG.cpp` |
+| ABMCオーダリング | 比留間 | 比留間真吾 (Shingo Hiruma) | `MatSolvers_ABMCICCG.cpp` |
+| ABMC並列IC分解・並列前後進代入 | 比留間 | 比留間真吾 | `MatSolvers_ABMCICCG.cpp` |
+| IC-MRTR反復 | 圓谷→佐藤 | 圓谷友紀 (原理), 佐藤 (実装) | `MatSolvers_ICMRTR.cpp` |
+| SGS-MRTR反復（Eisenstat法） | 圓谷→佐藤 | 圓谷友紀 (原理), 佐藤 (実装) | `MatSolvers_SGSMRTR.cpp` |
+| BDDC前処理 | NGSolve | Joachim Schöberl (原理・NGSolve実装) | — (新規) |
+
+### 7.2 オリジナルコード
+
+- **圓谷コード**: `S:/NGSolve/01_GitHub/2024_0405_疎行列ソルバ(逐次版)/`
+  - IC-MRTRとSGS-MRTRの反復公式のリファレンス実装（C言語、1-based indexing）
+  - シフトパラメータ付きIC分解の auto-shift ループ（gamma = 1.05, +0.05刻み）はこのコードに由来
+
+- **JP-MARs/SparseSolv**: `https://github.com/JP-MARs/SparseSolv`
+  - 佐藤 (tsato) による疎行列ソルバフレームワーク（C++, Eigenベース）
+  - 比留間によるABMC並列化の追加
+  - ngsolve-sparsesolvのfork元
+
+### 7.3 ngsolve-sparsesolv での拡張
+
+以下はfork後に追加された機能:
+
+| 機能 | 説明 |
+|---|---|
+| IC auto-shift | 半正定値行列への自動シフト調整 |
+| 対角スケーリング | DAD変換による条件数改善 |
+| ゼロ対角処理 | curl-curl行列のゼロ対角DOF対応 |
+| Localized IC (Block IC) | Fukuhara 2009のパーティションレベルIC |
+| Persistent parallel region | SpinBarrier同期によるレベルスケジューリング高速化 |
+| RCM順序付け | ABMC前のReverse Cuthill-McKee帯域縮小 |
+| BDDC前処理 | MKL PARDISOによる粗ソルバ、NGSolve非依存 |
+| 複素対称対応 | COCG/complex-symmetric CG |
+| NGSolve統合 | pybind11モジュール、BaseMatrix互換 |
 
 ---
 

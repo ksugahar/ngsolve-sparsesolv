@@ -252,13 +252,11 @@ public:
         shared_ptr<BitArray> freedofs,
         std::vector<std::vector<sparsesolv::index_t>> element_dofs,
         std::vector<sparsesolv::DOFType> dof_types,
-        std::vector<sparsesolv::DenseMatrix<SCAL>> element_matrices,
-        std::string coarse_inverse = "sparsecholesky")
+        std::vector<sparsesolv::DenseMatrix<SCAL>> element_matrices)
         : SparseSolvPrecondBase<SCAL>(mat, freedofs)
         , element_dofs_(std::move(element_dofs))
         , dof_types_(std::move(dof_types))
         , element_matrices_(std::move(element_matrices))
-        , coarse_inverse_type_(std::move(coarse_inverse))
         , precond_(std::make_shared<sparsesolv::BDDCPreconditioner<SCAL>>())
     {
         if (element_matrices_.empty())
@@ -278,10 +276,8 @@ public:
             precond_->set_free_dofs(std::move(free_dofs));
         }
 
+        // setup() builds PARDISO coarse solver internally
         precond_->setup(view);
-
-        // Build NGSolve sparse direct inverse for wirebasket coarse solve
-        build_ngsolve_coarse_inverse();
     }
 
     sparsesolv::index_t NumWirebasketDofs() const {
@@ -291,73 +287,16 @@ public:
         return precond_->num_interface_dofs();
     }
 
-    const std::string& GetCoarseInverseType() const { return coarse_inverse_type_; }
-
 protected:
     void apply_precond(const SCAL* x, SCAL* y) const override {
         precond_->apply(x, y, this->height_);
     }
 
 private:
-    /// Build NGSolve sparse direct inverse (PARDISO/SparseCholesky) for wirebasket coarse solve
-    void build_ngsolve_coarse_inverse() {
-        const auto& wb_csr = precond_->wirebasket_csr();
-        sparsesolv::index_t n_wb = precond_->num_wirebasket_dofs();
-
-        // Build n_wb x n_wb SparseMatrix from CSR data
-
-        // Create NGSolve SparseMatrix from wirebasket CSR
-        Array<int> elsperrow(n_wb);
-        for (sparsesolv::index_t i = 0; i < n_wb; ++i)
-            elsperrow[i] = wb_csr.row_ptr[i + 1] - wb_csr.row_ptr[i];
-
-        auto sp_mat = make_shared<SparseMatrix<SCAL>>(elsperrow, n_wb);
-        for (sparsesolv::index_t i = 0; i < n_wb; ++i) {
-            auto cols = sp_mat->GetRowIndices(i);
-            auto vals = sp_mat->GetRowValues(i);
-            sparsesolv::index_t off = wb_csr.row_ptr[i];
-            for (int k = 0; k < elsperrow[i]; ++k) {
-                cols[k] = wb_csr.col_idx[off + k];
-                vals[k] = wb_csr.values[off + k];
-            }
-        }
-
-        // Keep SparseMatrix alive (inverse holds a reference to it)
-        coarse_mat_ = sp_mat;
-
-        // Create sparse direct inverse
-        sp_mat->SetInverseType(coarse_inverse_type_);
-        coarse_inv_ = sp_mat->InverseMatrix();
-
-        // Pre-allocate work vectors
-        coarse_rhs_ = make_shared<VVector<SCAL>>(n_wb);
-        coarse_sol_ = make_shared<VVector<SCAL>>(n_wb);
-
-        // Set coarse solver callback on BDDC preconditioner
-        precond_->set_coarse_solver(
-            [this](const SCAL* rhs, SCAL* sol) {
-                auto n = precond_->num_wirebasket_dofs();
-                auto rhs_fv = coarse_rhs_->FV<SCAL>();
-                auto sol_fv = coarse_sol_->FV<SCAL>();
-                for (sparsesolv::index_t i = 0; i < n; ++i)
-                    rhs_fv[i] = rhs[i];
-                coarse_inv_->Mult(*coarse_rhs_, *coarse_sol_);
-                for (sparsesolv::index_t i = 0; i < n; ++i)
-                    sol[i] = sol_fv[i];
-            });
-    }
-
     std::vector<std::vector<sparsesolv::index_t>> element_dofs_;
     std::vector<sparsesolv::DOFType> dof_types_;
     std::vector<sparsesolv::DenseMatrix<SCAL>> element_matrices_;
-    std::string coarse_inverse_type_;
     shared_ptr<sparsesolv::BDDCPreconditioner<SCAL>> precond_;
-
-    // NGSolve coarse solver
-    shared_ptr<BaseMatrix> coarse_mat_;  // wirebasket SparseMatrix (must outlive coarse_inv_)
-    shared_ptr<BaseMatrix> coarse_inv_;
-    mutable shared_ptr<BaseVector> coarse_rhs_;
-    mutable shared_ptr<BaseVector> coarse_sol_;
 };
 
 // Type aliases for convenience

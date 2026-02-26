@@ -46,6 +46,14 @@ public:
         }
     }
 
+    /// Merge entries from another COO accumulator (move)
+    void merge_from(SparseMatrixCOO&& other) {
+        entries_.insert(entries_.end(),
+                        std::make_move_iterator(other.entries_.begin()),
+                        std::make_move_iterator(other.entries_.end()));
+        other.entries_.clear();
+    }
+
     /// Convert to CSR: sort by (row,col), merge duplicates, build row_ptr
     SparseMatrixCSR<Scalar> to_csr() const {
         SparseMatrixCSR<Scalar> csr;

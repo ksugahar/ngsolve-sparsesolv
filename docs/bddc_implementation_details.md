@@ -337,60 +337,33 @@ values  = [e.value for e in merged]
 
 Wirebasket Schur 補体 `wb_csr_` ($n_{wb} \times n_{wb}$) に対する直接法ソルバーを構築します。
 
-| `coarse_inverse` | 方式 | 用途 |
-|-------------------|------|------|
-| `"sparsecholesky"` | NGSolve SparseCholesky | 標準（既定） |
-| `"pardiso"` | Intel PARDISO | 大規模 wirebasket 向け |
-
-粗ソルバーは **コールバック関数** `void(const Scalar* rhs, Scalar* sol)` として BDDC コアに渡されます。コールバックのインターフェース:
-
-- **入力**: `rhs` — コンパクト WB 番号付けの $n_{wb}$ 次元ベクトル
-- **出力**: `sol` — コンパクト WB 番号付けの $n_{wb}$ 次元ベクトル
-- **処理**: $\text{sol} = S_{WW}^{-1} \cdot \text{rhs}$
-
-NGSolve の `InverseMatrix` を利用する場合の具体的な手順:
+**MKL PARDISO** を直接使用します（NGSolve非依存）。
+粗ソルバーは `bddc_preconditioner.hpp` 内部で直接構築され、外部からの注入は不要です。
 
 ```cpp
-// 1. CSR → NGSolve SparseMatrix 変換
-Array<int> elsperrow(n_wb);
-for (int i = 0; i < n_wb; ++i)
-    elsperrow[i] = wb_csr.row_ptr[i+1] - wb_csr.row_ptr[i];
-auto sp_mat = make_shared<SparseMatrix<SCAL>>(elsperrow, n_wb);
-for (int i = 0; i < n_wb; ++i) {
-    auto cols = sp_mat->GetRowIndices(i);
-    auto vals = sp_mat->GetRowValues(i);
-    int off = wb_csr.row_ptr[i];
-    for (int k = 0; k < elsperrow[i]; ++k) {
-        cols[k] = wb_csr.col_idx[off + k];
-        vals[k] = wb_csr.values[off + k];
-    }
-}
-
-// 2. 直接法ソルバーの構築
-sp_mat->SetInverseType("sparsecholesky");  // or "pardiso"
-auto coarse_inv = sp_mat->InverseMatrix();
-
-// 3. コールバック関数として登録
-// VVector はデータコピーを介して rhs/sol をやりとり
-auto coarse_rhs = make_shared<VVector<SCAL>>(n_wb);
-auto coarse_sol = make_shared<VVector<SCAL>>(n_wb);
-
-bddc_precond->set_coarse_solver(
-    [=](const SCAL* rhs, SCAL* sol) {
-        // コンパクトWBベクトル → NGSolve BaseVector にコピー
-        auto rhs_fv = coarse_rhs->FV<SCAL>();
-        for (int i = 0; i < n_wb; ++i)
-            rhs_fv[i] = rhs[i];
-        // 直接法ソルブ
-        coarse_inv->Mult(*coarse_rhs, *coarse_sol);
-        // NGSolve BaseVector → コンパクトWBベクトルにコピー
-        auto sol_fv = coarse_sol->FV<SCAL>();
-        for (int i = 0; i < n_wb; ++i)
-            sol[i] = sol_fv[i];
-    });
+// bddc_preconditioner.hpp: build_pardiso_coarse_solver()
+pardiso_solver_ = std::make_unique<PardisoSolver<Scalar>>();
+pardiso_solver_->factorize(
+    n_wb_,
+    wb_csr_.row_ptr.data(),
+    wb_csr_.col_idx.data(),
+    wb_csr_.values.data());
 ```
 
-> **メモリ寿命の注意**: `sp_mat`（NGSolve SparseMatrix）は `coarse_inv` が参照しているため、`coarse_inv` より長く生存させる必要があります。`shared_ptr` で保持してください。
+`PardisoSolver` (`direct/pardiso_solver.hpp`) の処理:
+
+1. **上三角抽出**: 入力の full symmetric CSR から上三角部分 (col >= row) を抽出
+2. **分析** (phase 11): シンボリック分解
+3. **数値分解** (phase 22): LDL^T 分解
+4. **求解** (phase 33, Apply時): 前進・後退代入
+
+| 設定 | 値 | 説明 |
+|------|-----|------|
+| `iparm[34]` | 1 | 0-based indexing |
+| `mtype` | 2 (real) / 6 (complex) | テンプレート自動選択 |
+| MKL interface | LP64 | `MKL_INT` = int (32-bit) |
+
+> **NGSolve非依存**: 以前のバージョンではNGSolveの `InverseMatrix()` をコールバックで使用していましたが、現在はMKL PARDISOを直接呼び出します。これにより `bddc_preconditioner.hpp` はNGSolveに一切依存しません。
 
 ---
 
@@ -541,7 +514,7 @@ Apply フェーズは両実装とも CSR SpMV ベースであり、計算量・�
 |------|----------------|-------------|
 | 反復回数 | **完全一致** (全スケールで確認) | 同左 |
 | ソルブ時間 | 同等 | 同等 |
-| セットアップ時間 | **約 1.3 倍** | (基準) |
+| セットアップ時間 | **約 1.5 倍** | (基準) |
 
 | DOFs | SparseSolv setup | NGSolve setup | SparseSolv solve | NGSolve solve | 反復数 |
 |------|-----------------|--------------|-----------------|--------------|--------|
@@ -550,7 +523,16 @@ Apply フェーズは両実装とも CSR SpMV ベースであり、計算量・�
 | 309K (p=2) | 4.11s | 3.70s | 5.18s | 5.43s | 38 |
 | 837K (p=3) | 10.82s | 7.96s | 14.89s | 15.01s | 61 |
 
-**結論**: 反復数は完全一致。ソルブ時間は同等。セットアップのみ要素行列再計算分の差がある。
+コイルインスフィア HCurl (p=2, 148K DOFs, 8スレッド):
+
+| 項目 | SparseSolv BDDC | NGSolve BDDC | ABMC+ICCG |
+|------|----------------|-------------|-----------|
+| 反復数 | 47 | 46 | 444 |
+| セットアップ | 1031ms | 681ms | — |
+| ソルブ | 1078ms | 682ms | — |
+| **合計** | **2109ms** | **1363ms** | **2457ms** |
+
+**結論**: 反復数は完全一致。BDDCはABMC+ICCGより高速（反復数の圧倒的差）。セットアップのみ要素行列再計算分の差がある。
 
 ---
 
@@ -561,18 +543,19 @@ Apply フェーズは両実装とも CSR SpMV ベースであり、計算量・�
 | `core/sparse_matrix_coo.hpp` | COO 蓄積・CSR 変換 | なし |
 | `core/sparse_matrix_csr.hpp` | CSR 格納・SpMV | `core/parallel.hpp` |
 | `core/dense_matrix.hpp` | 密行列演算（LU逆行列・乗算） | なし |
-| `preconditioners/bddc_preconditioner.hpp` | **BDDC コア**（粗ソルバーは外部コールバック） | 上記3ファイル |
+| `direct/pardiso_solver.hpp` | **MKL PARDISO ラッパー** | MKL |
+| `preconditioners/bddc_preconditioner.hpp` | **BDDC コア**（PARDISO粗ソルバー内蔵） | 上記4ファイル |
 | `ngsolve/sparsesolv_precond.hpp` | NGSolve BaseMatrix ラッパー | BDDC コア + NGSolve |
 | `ngsolve/sparsesolv_python_export.hpp` | pybind11 バインディング + 要素抽出 | ラッパー + pybind11 |
 
-BDDC コア (`bddc_preconditioner.hpp`) の要素 Schur 補体計算は NGSolve に依存しません。ただし、粗空間ソルバーはコールバック (`std::function<void(const Scalar*, Scalar*)>`) で外部から注入する設計であり、本モジュールでは NGSolve の疎直接法 (SparseCholesky / PARDISO) を利用しています。
+BDDC コア (`bddc_preconditioner.hpp`) は**NGSolve に一切依存しません**。要素 Schur 補体計算と粗空間ソルバー (MKL PARDISO) の両方がNGSolve非依存です。NGSolve依存はラッパー層 (`sparsesolv_precond.hpp`) の要素行列抽出部分のみです。
 
 ---
 
 ## 7. この実装の特性
 
 1.  **NGSolve BDDC と数学的に同一**: 反復数・精度が完全一致することを確認済み。
-2.  **コア部分の FEM 非依存**: 要素 Schur 補体・Harmonic Extension の計算は NGSolve に依存しない。粗空間ソルバーは NGSolve の疎直接法をコールバックで利用。
+2.  **コア部分の NGSolve 完全独立**: 要素 Schur 補体・Harmonic Extension の計算も、粗空間ソルバー (MKL PARDISO) もNGSolveに依存しない。NGSolve依存はラッパー層の要素行列抽出のみ。
 3.  **要素完全独立並列**: セットアップの要素ループは `IterateElements` で並列化。Apply は CSR SpMV で行並列化。
 4.  **Shifted-BDDC**: 構築行列と系行列を分離可能（ただし単連結領域のみ。後述）。
 5.  **複素数対応**: テンプレートにより `double` / `complex<double>` の両方に対応。
@@ -583,7 +566,7 @@ BDDC コア (`bddc_preconditioner.hpp`) の要素 Schur 補体計算は NGSolve 
 ## 8. Python API
 
 ```python
-pre = BDDCPreconditioner(a, fes, coarse_inverse="sparsecholesky")
+pre = BDDCPreconditioner(a, fes)
 inv = CGSolver(mat=a.mat, pre=pre, maxiter=500, tol=1e-8)
 gfu.vec.data = inv * f.vec
 ```
@@ -592,7 +575,8 @@ gfu.vec.data = inv * f.vec
 |------|------|--------|------|
 | `a` | `BilinearForm` | 必須 | **組立済み**の双線形形式 |
 | `fes` | `FESpace` | 必須 | 有限要素空間 |
-| `coarse_inverse` | `str` | `"sparsecholesky"` | 粗空間ソルバー |
+
+粗空間ソルバーは MKL PARDISO が自動的に使用されます（設定不要）。
 
 | プロパティ | 型 | 説明 |
 |-----------|------|------|

@@ -178,8 +178,7 @@ inline shared_ptr<BitArray> ExtractFreeDofs(py::object freedofs) {
 template<typename SCAL>
 shared_ptr<BaseMatrix> CreateBDDCFromBilinearForm(
     shared_ptr<ngcomp::BilinearForm> bfa,
-    shared_ptr<ngcomp::FESpace> fes,
-    const std::string& coarse_inverse)
+    shared_ptr<ngcomp::FESpace> fes)
 {
     auto mat = dynamic_pointer_cast<SparseMatrix<SCAL>>(bfa->GetMatrixPtr());
     if (!mat) throw py::type_error("BDDCPreconditioner: matrix type mismatch");
@@ -256,8 +255,7 @@ shared_ptr<BaseMatrix> CreateBDDCFromBilinearForm(
 
     auto p = make_shared<SparseSolvBDDCPreconditioner<SCAL>>(
         mat, freedofs, std::move(element_dofs),
-        std::move(dof_types), std::move(element_matrices),
-        coarse_inverse);
+        std::move(dof_types), std::move(element_matrices));
     p->Update();
     return p;
 }
@@ -336,16 +334,15 @@ freedofs : BitArray, optional
 
   // ---- BDDCPreconditioner factory ----
   m.def("BDDCPreconditioner", [](py::object first_arg,
-                                  py::object second_arg,
-                                  std::string coarse_inverse) {
-    // BilinearForm API: BDDCPreconditioner(a, fes, coarse_inverse=...)
+                                  py::object second_arg) {
+    // BilinearForm API: BDDCPreconditioner(a, fes)
     try {
       auto bfa = py::cast<shared_ptr<ngcomp::BilinearForm>>(first_arg);
       auto fes = py::cast<shared_ptr<ngcomp::FESpace>>(second_arg);
       if (bfa->GetMatrixPtr()->IsComplex())
-        return CreateBDDCFromBilinearForm<Complex>(bfa, fes, coarse_inverse);
+        return CreateBDDCFromBilinearForm<Complex>(bfa, fes);
       else
-        return CreateBDDCFromBilinearForm<double>(bfa, fes, coarse_inverse);
+        return CreateBDDCFromBilinearForm<double>(bfa, fes);
     } catch (py::cast_error&) {
       throw py::type_error(
           "BDDCPreconditioner(a, fes): expected BilinearForm and FESpace");
@@ -353,11 +350,11 @@ freedofs : BitArray, optional
   },
   py::arg("a"),
   py::arg("fes"),
-  py::arg("coarse_inverse") = "sparsecholesky",
   R"raw_string(
 BDDC (Balancing Domain Decomposition by Constraints) Preconditioner.
 
 Extracts element matrices from BilinearForm and builds element-by-element BDDC.
+Uses MKL PARDISO for the wirebasket coarse solve.
 
 Parameters:
 
@@ -365,8 +362,6 @@ a : BilinearForm
   Assembled BilinearForm.
 fes : FESpace
   Finite element space.
-coarse_inverse : str
-  Coarse solver: "sparsecholesky" (default), "pardiso".
 )raw_string");
 
   // ---- SparseSolvSolver factory ----
