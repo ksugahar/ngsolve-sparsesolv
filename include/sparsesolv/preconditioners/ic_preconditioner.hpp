@@ -69,18 +69,18 @@ public:
         const index_t n = A.rows();
         size_ = n;
 
-        // Clear RCM state from previous setup
+        // Clear state from previous setup
         rcm_ordering_.clear();
         rcm_reverse_ordering_.clear();
         rcm_csr_.clear();
-
         if (config_.use_abmc) {
-            // ABMC path: optionally apply RCM first, then reorder + factorize
+            // ============================================================
+            // ABMC path: reorder + color-parallel IC
+            // ============================================================
             const index_t* src_row_ptr = A.row_ptr();
             const index_t* src_col_idx = A.col_idx();
 
             if (config_.abmc_use_rcm) {
-                // Step 0: RCM bandwidth reduction
                 compute_rcm_ordering(A.row_ptr(), A.col_idx(), n,
                                      rcm_ordering_, rcm_reverse_ordering_);
                 reorder_matrix_with_perm(A, rcm_ordering_, rcm_csr_);
@@ -88,11 +88,9 @@ public:
                 src_col_idx = rcm_csr_.col_idx.data();
             }
 
-            // 1. Build ABMC schedule from (possibly RCM-reordered) matrix
             abmc_schedule_.build(src_row_ptr, src_col_idx, n,
                                  config_.abmc_block_size, config_.abmc_num_colors);
 
-            // 2. Reorder the matrix according to ABMC permutation
             if (config_.abmc_use_rcm) {
                 SparseMatrixView<Scalar> rcm_view(
                     rcm_csr_.rows, rcm_csr_.cols,
@@ -103,7 +101,6 @@ public:
                 reorder_matrix(A);
             }
 
-            // 3. Extract lower triangular from the reordered matrix
             SparseMatrixView<Scalar> A_reordered(
                 reordered_csr_.rows, reordered_csr_.cols,
                 reordered_csr_.row_ptr.data(),
@@ -111,55 +108,58 @@ public:
                 reordered_csr_.values.data());
             extract_lower_triangular(A_reordered);
 
-            // Memory management for reordered matrices
             if (!config_.abmc_reorder_spmv) {
-                reordered_csr_.clear(); // SpMV uses original or RCM matrix
+                reordered_csr_.clear();
             }
             if (!config_.abmc_use_rcm) {
                 rcm_csr_.clear();
             }
-        } else {
-            // Standard path: extract lower triangular directly
-            extract_lower_triangular(A);
-        }
 
-        // Save original values for auto-shift restart or diagonal scaling
-        if (config_.auto_shift || config_.diagonal_scaling) {
-            original_values_ = L_.values;
-        }
+            if (config_.auto_shift || config_.diagonal_scaling) {
+                original_values_ = L_.values;
+            }
+            if (config_.diagonal_scaling) {
+                compute_scaling_factors();
+            }
 
-        // Compute diagonal scaling factors if enabled
-        if (config_.diagonal_scaling) {
-            compute_scaling_factors();
-        }
+            if (!config_.auto_shift) {
+                compute_ic_factorization_abmc();
+            } else {
+                compute_ic_factorization();
+            }
 
-        // Compute IC factorization
-        // ABMC path: color-parallel factorization (auto_shift not supported)
-        // Sequential path: standard factorization (with auto-shift if enabled)
-        if (config_.use_abmc && abmc_schedule_.is_built() && !config_.auto_shift) {
-            compute_ic_factorization_abmc();
-        } else {
-            compute_ic_factorization();
-        }
+            compute_transpose();
 
-        // Compute transpose L^T
-        compute_transpose();
+            work_temp_.resize(n);
+            if (config_.diagonal_scaling) {
+                work_temp2_.resize(n);
+            }
 
-        // Pre-allocate work vectors (avoid per-call heap allocation)
-        work_temp_.resize(n);
-        if (config_.diagonal_scaling) {
-            work_temp2_.resize(n);
-        }
-
-        if (config_.use_abmc) {
-            // Pre-allocate ABMC-specific work vectors
             abmc_x_perm_.resize(n);
             abmc_y_perm_.resize(n);
-
-            // Pre-compute composite permutations to avoid multi-level indirection
             build_composite_permutations(n);
+
         } else {
-            // Build level schedules for parallel triangular solves
+            // ============================================================
+            // Standard path: extract + level-schedule
+            // ============================================================
+            extract_lower_triangular(A);
+
+            if (config_.auto_shift || config_.diagonal_scaling) {
+                original_values_ = L_.values;
+            }
+            if (config_.diagonal_scaling) {
+                compute_scaling_factors();
+            }
+
+            compute_ic_factorization();
+            compute_transpose();
+
+            work_temp_.resize(n);
+            if (config_.diagonal_scaling) {
+                work_temp2_.resize(n);
+            }
+
             fwd_schedule_.build_from_lower(L_.row_ptr.data(), L_.col_idx.data(), n);
             bwd_schedule_.build_from_upper(Lt_.row_ptr.data(), Lt_.col_idx.data(), n);
         }
@@ -429,30 +429,132 @@ private:
     /**
      * @brief Apply with ABMC ordering (handles both ABMC-only and RCM+ABMC)
      *
-     * Uses pre-computed composite_perm_ to permute input/output in a single
-     * level of indirection, regardless of whether RCM is used.
+     * Uses a single parallel_for(nthreads, ...) dispatch with SpinBarrier
+     * synchronization to avoid repeated TaskManager launch overhead.
+     * Integrates: permute_input -> forward -> backward -> permute_output.
      */
     void apply_abmc(const Scalar* x, Scalar* y, index_t size) const {
-        const auto& perm = composite_perm_;
+        const int nthreads = get_num_threads();
 
-        if (config_.diagonal_scaling && !composite_scaling_.empty()) {
-            parallel_for(size, [&](index_t i) {
+        // Single-thread: avoid SpinBarrier overhead
+        if (nthreads <= 1) {
+            apply_abmc_serial(x, y, size);
+            return;
+        }
+
+        const auto& perm = composite_perm_;
+        const bool use_scaling = config_.diagonal_scaling && !composite_scaling_.empty();
+        const index_t nc = abmc_schedule_.num_colors();
+
+        Scalar* xp = abmc_x_perm_.data();
+        Scalar* temp = work_temp_.data();
+        Scalar* yp = abmc_y_perm_.data();
+
+        {
+            // Standard ABMC: color-sequential with barrier synchronization
+            // 2*nc+2 barriers total (vs 2*nc+2 parallel_for launches before)
+            SpinBarrier barrier(nthreads);
+
+            parallel_for(static_cast<index_t>(nthreads), [&](index_t tid) {
+                // Phase 1: Permute input
+                const index_t perm_start = size * tid / nthreads;
+                const index_t perm_end = size * (tid + 1) / nthreads;
+                if (use_scaling) {
+                    for (index_t i = perm_start; i < perm_end; ++i)
+                        xp[perm[i]] = x[i] * static_cast<Scalar>(composite_scaling_[i]);
+                } else {
+                    for (index_t i = perm_start; i < perm_end; ++i)
+                        xp[perm[i]] = x[i];
+                }
+                barrier.wait();
+
+                // Phase 2: Forward substitution (color-sequential)
+                for (index_t c = 0; c < nc; ++c) {
+                    const index_t blk_begin = abmc_schedule_.color_offsets[c];
+                    const index_t blk_end = abmc_schedule_.color_offsets[c + 1];
+                    const index_t num_blocks = blk_end - blk_begin;
+                    const index_t my_start = num_blocks * tid / nthreads;
+                    const index_t my_end = num_blocks * (tid + 1) / nthreads;
+
+                    for (index_t bidx = my_start; bidx < my_end; ++bidx) {
+                        const index_t blk = abmc_schedule_.color_blocks[blk_begin + bidx];
+                        const index_t row_begin = abmc_schedule_.block_offsets[blk];
+                        const index_t row_end = abmc_schedule_.block_offsets[blk + 1];
+                        for (index_t i = row_begin; i < row_end; ++i) {
+                            Scalar s = xp[i];
+                            const index_t l_start = L_.row_ptr[i];
+                            const index_t l_end = L_.row_ptr[i + 1] - 1;
+                            for (index_t k = l_start; k < l_end; ++k)
+                                s -= L_.values[k] * temp[L_.col_idx[k]];
+                            temp[i] = s / L_.values[l_end];
+                        }
+                    }
+                    barrier.wait();
+                }
+
+                // Phase 3: Backward substitution (color-reverse)
+                for (index_t c = nc; c-- > 0;) {
+                    const index_t blk_begin = abmc_schedule_.color_offsets[c];
+                    const index_t blk_end = abmc_schedule_.color_offsets[c + 1];
+                    const index_t num_blocks = blk_end - blk_begin;
+                    const index_t my_start = num_blocks * tid / nthreads;
+                    const index_t my_end = num_blocks * (tid + 1) / nthreads;
+
+                    for (index_t bidx = my_start; bidx < my_end; ++bidx) {
+                        const index_t blk = abmc_schedule_.color_blocks[blk_begin + bidx];
+                        const index_t row_begin = abmc_schedule_.block_offsets[blk];
+                        const index_t row_end = abmc_schedule_.block_offsets[blk + 1];
+                        for (index_t i = row_end; i-- > row_begin;) {
+                            Scalar s = Scalar(0);
+                            const index_t lt_start = Lt_.row_ptr[i] + 1;
+                            const index_t lt_end = Lt_.row_ptr[i + 1];
+                            for (index_t k = lt_start; k < lt_end; ++k)
+                                s -= Lt_.values[k] * yp[Lt_.col_idx[k]];
+                            yp[i] = s * inv_diag_[i] + temp[i];
+                        }
+                    }
+                    barrier.wait();
+                }
+
+                // Phase 4: Permute output
+                if (use_scaling) {
+                    for (index_t i = perm_start; i < perm_end; ++i)
+                        y[i] = yp[perm[i]] * static_cast<Scalar>(composite_scaling_[i]);
+                } else {
+                    for (index_t i = perm_start; i < perm_end; ++i)
+                        y[i] = yp[perm[i]];
+                }
+            });
+        }
+    }
+
+    /**
+     * @brief Serial fallback for apply_abmc (no SpinBarrier overhead)
+     */
+    void apply_abmc_serial(const Scalar* x, Scalar* y, index_t size) const {
+        const auto& perm = composite_perm_;
+        const bool use_scaling = config_.diagonal_scaling && !composite_scaling_.empty();
+
+        // Permute input
+        if (use_scaling) {
+            for (index_t i = 0; i < size; ++i)
                 abmc_x_perm_[perm[i]] = x[i] * static_cast<Scalar>(composite_scaling_[i]);
-            });
-            forward_substitution_abmc(abmc_x_perm_.data(), work_temp_.data());
-            backward_substitution_abmc(work_temp_.data(), abmc_y_perm_.data());
-            parallel_for(size, [&](index_t i) {
-                y[i] = abmc_y_perm_[perm[i]] * static_cast<Scalar>(composite_scaling_[i]);
-            });
         } else {
-            parallel_for(size, [&](index_t i) {
+            for (index_t i = 0; i < size; ++i)
                 abmc_x_perm_[perm[i]] = x[i];
-            });
-            forward_substitution_abmc(abmc_x_perm_.data(), work_temp_.data());
-            backward_substitution_abmc(work_temp_.data(), abmc_y_perm_.data());
-            parallel_for(size, [&](index_t i) {
+        }
+
+        // Triangular solves
+        forward_substitution_abmc(abmc_x_perm_.data(), work_temp_.data());
+        backward_substitution_abmc(work_temp_.data(), abmc_y_perm_.data());
+
+        // Permute output
+        if (use_scaling) {
+            for (index_t i = 0; i < size; ++i)
+                y[i] = abmc_y_perm_[perm[i]] * static_cast<Scalar>(composite_scaling_[i]);
+        } else {
+            for (index_t i = 0; i < size; ++i)
                 y[i] = abmc_y_perm_[perm[i]];
-            });
         }
     }
 

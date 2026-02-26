@@ -189,6 +189,16 @@ public:
         precond_->set_shift_parameter(shift);
     }
 
+    // ABMC accessors
+    bool GetUseABMC() const { return config_.use_abmc; }
+    void SetUseABMC(bool v) { config_.use_abmc = v; sync_config(); }
+    int GetABMCBlockSize() const { return config_.abmc_block_size; }
+    void SetABMCBlockSize(int v) { config_.abmc_block_size = v; sync_config(); }
+    int GetABMCNumColors() const { return config_.abmc_num_colors; }
+    void SetABMCNumColors(int v) { config_.abmc_num_colors = v; sync_config(); }
+    bool GetDiagonalScaling() const { return config_.diagonal_scaling; }
+    void SetDiagonalScaling(bool v) { config_.diagonal_scaling = v; sync_config(); }
+
 protected:
     void apply_precond(const SCAL* x, SCAL* y) const override {
         precond_->apply(x, y, this->height_);
@@ -196,7 +206,13 @@ protected:
 
 private:
     double shift_;
+    sparsesolv::SolverConfig config_;
     shared_ptr<sparsesolv::ICPreconditioner<SCAL>> precond_;
+
+    void sync_config() {
+        config_.shift_parameter = shift_;
+        precond_->set_config(config_);
+    }
 };
 
 // ============================================================================

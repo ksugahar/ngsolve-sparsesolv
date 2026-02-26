@@ -57,7 +57,19 @@ void ExportSparseSolvTyped(py::module& m, const std::string& suffix) {
       .def("Update", &SparseSolvICPreconditioner<SCAL>::Update)
       .def_property("shift",
           &SparseSolvICPreconditioner<SCAL>::GetShift,
-          &SparseSolvICPreconditioner<SCAL>::SetShift);
+          &SparseSolvICPreconditioner<SCAL>::SetShift)
+      .def_property("use_abmc",
+          &SparseSolvICPreconditioner<SCAL>::GetUseABMC,
+          &SparseSolvICPreconditioner<SCAL>::SetUseABMC)
+      .def_property("abmc_block_size",
+          &SparseSolvICPreconditioner<SCAL>::GetABMCBlockSize,
+          &SparseSolvICPreconditioner<SCAL>::SetABMCBlockSize)
+      .def_property("abmc_num_colors",
+          &SparseSolvICPreconditioner<SCAL>::GetABMCNumColors,
+          &SparseSolvICPreconditioner<SCAL>::SetABMCNumColors)
+      .def_property("diagonal_scaling",
+          &SparseSolvICPreconditioner<SCAL>::GetDiagonalScaling,
+          &SparseSolvICPreconditioner<SCAL>::SetDiagonalScaling);
   }
 
   // SGS Preconditioner type registration
