@@ -41,5 +41,10 @@ results_*.json
 # Claude sessions
 .claude/
 
+# VTK output files
+*.vtu
+*.vtk
+*.pvd
+
 # Original mesh files (gmsh v1 format, kept locally)
 **/original_msh1/
