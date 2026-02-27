@@ -25,14 +25,15 @@ NGSolveの `CGSolver` と組み合わせて使用する。
 ### コンストラクタ
 
 ```python
-pre = BDDCPreconditioner(a, fes, coarse_inverse="sparsecholesky")
+pre = BDDCPreconditioner(a, fes)
 ```
 
 | 引数 | 型 | 説明 |
 |------|------|------|
 | `a` | `BilinearForm` | **組立済み**の双線形形式 (`a.Assemble()` 済み) |
 | `fes` | `FESpace` | 有限要素空間 |
-| `coarse_inverse` | `str` | 粗空間ソルバー: `"sparsecholesky"` (既定), `"pardiso"` |
+
+粗空間ソルバーにはMKL PARDISOを使用（内部で自動選択）。
 
 **内部処理**:
 1. `fes.CouplingType` からDOF分類 (wirebasket/interface) を取得

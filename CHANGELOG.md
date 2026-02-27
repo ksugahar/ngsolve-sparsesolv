@@ -5,6 +5,35 @@
 形式は[Keep a Changelog](https://keepachangelog.com/en/1.1.0/)に基づいており、
 このプロジェクトは[Semantic Versioning](https://semver.org/spec/v2.0.0.html)に従っています。
 
+## [2.3.0] - 2026-02-28
+
+### 追加
+- Hiruma渦電流問題のメッシュ例題 (6メッシュ、Gmsh v2形式、Git LFS)
+- `examples/hiruma/eddy_current.py` — A-Phi定式化の渦電流解析
+- `examples/hiruma/bench_parallel.py` — BDDC vs ABMC+ICCG 並列スケーリングベンチマーク
+
+### 改善
+- CG反復のカーネル融合 — メモリトラフィック約20%削減
+  - SpMV + dot(p, Ap) を1パスに融合 (p[], Ap[] の再読込排除)
+  - AXPY + 残差ノルム計算を1パスに融合 (r[] の再読込排除)
+  - 反復あたりのカーネル起動を7回から5回に削減
+- ABMC並列IC分解でauto_shift対応 (アトミックフラグによるリスタート)
+  - 従来: auto_shift有効時はABMC並列パスが使えず逐次IC分解にフォールバック
+  - 改善: 並列分解中にbreakdownを検出→シフト増加→全体リスタートで完全並列化
+- Hiruma HCurl p=1 渦電流問題で並列スケーリング 1.5x → 2.85x (8コア)
+
+## [2.2.0] - 2026-02-25
+
+### 追加
+- BDDC前処理: MKL PARDISO直接統合による粗解法
+- ABMC並列IC分解 (色ごとのparallel_for)
+- レベルスケジューリング三角解法の持続的並列領域 (SpinBarrier)
+- ABMCプロパティのPython API公開 (`use_abmc`, `abmc_block_size`, etc.)
+
+### 変更
+- BDDC粗解法をNGSolve SparseCholeskyからMKL PARDISOに変更
+- ヘッダオンリーインストールからngsolve/ヘッダを除外
+
 ## [2.1.0] - 2026-02-21
 
 ### 追加

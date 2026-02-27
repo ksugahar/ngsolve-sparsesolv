@@ -167,7 +167,7 @@ C++側で要素行列を抽出する:
 m.def("BDDCPreconditioner", [](py::object a, py::object fes, ...) {
     auto bfa = py::cast<shared_ptr<BilinearForm>>(a);
     auto fes_ptr = py::cast<shared_ptr<FESpace>>(fes);
-    // → CreateBDDCFromBilinearForm<SCAL>(bfa, fes, coarse_inverse)
+    // → CreateBDDCFromBilinearForm<SCAL>(bfa, fes)
 });
 ```
 

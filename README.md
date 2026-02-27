@@ -44,9 +44,9 @@ NGSolveには直接法ソルバーと組込みBDDCが搭載されている。Spa
 
 | ソルバー | 反復数 | 計算時間 | vs ICCG |
 |---------|--------|---------|---------|
-| ICCG | 513 | 13.1 s | 1.0x |
-| ICCG + ABMC (8色) | 444 | 7.4 s | **1.8x** |
-| BDDC | 47 | 4.2 s | **3.1x** |
+| ICCG | 513 | 12.3 s | 1.0x |
+| ICCG + ABMC (8色) | 444 | 6.6 s | **1.9x** |
+| BDDC | 46 | 2.9 s | **4.2x** |
 
 ABMCは三角解法のボトルネックを並列化し、ICCG計算時間をほぼ半減。
 BDDCはメッシュ非依存の収束でさらに高速。
@@ -55,7 +55,7 @@ BDDCはメッシュ非依存の収束でさらに高速。
 
 | ソース構成 | ICCG | BDDC |
 |-----------|------|------|
-| ポテンシャルベース `J*v*dx` (非div-free) | 1000反復, **不収束** | 33反復, 収束 |
+| ポテンシャルベース `J*v*dx` (非div-free) | 1000反復, **不収束** | 35反復, 収束 |
 | curl-based `T*curl(v)*dx` (div-free) | 161反復, 収束 | 53反復, 収束 |
 
 ICCGはソースが離散的にdiv-freeであることを要求する — 実際には保証しにくい条件。
@@ -183,7 +183,7 @@ from sparsesolv_ngsolve import BDDCPreconditioner
 from ngsolve.krylovspace import CGSolver
 
 # BDDCはBilinearForm + FESpaceを受け取る (行列だけではない)
-pre = BDDCPreconditioner(a, fes, coarse_inverse="sparsecholesky")
+pre = BDDCPreconditioner(a, fes)
 inv = CGSolver(a.mat, pre, tol=1e-10)
 gfu.vec.data = inv * f.vec
 ```
@@ -203,7 +203,7 @@ gfu.vec.data = solver * f.vec
 ABMCアルゴリズムは近傍の行をブロックに集約 (BFS集約) した後、
 ブロック隣接グラフを彩色して同色ブロック間の下三角依存関係を排除する。
 三角解法では色を逐次処理し、各色内のブロックを並列に実行する。
-148K DOF HCurl問題 (8スレッド) で、ABMCはICCG計算時間を13.1秒から7.4秒に短縮 (1.8倍高速化)。
+148K DOF HCurl問題 (8スレッド) で、ABMCはICCG計算時間を12.3秒から6.6秒に短縮 (1.9倍高速化)。
 
 ### 前処理 + NGSolve CGSolver
 

@@ -508,43 +508,104 @@ for c = 0 to num_colors - 1:
 
 ---
 
-## 10. 既知の制限
+## 10. CGカーネル融合 (v2.3.0)
 
-### 10.1 色数の非予測性
+### 10.1 動機
+
+CG反復はメモリ帯域律速 (算術強度 ~0.33 FLOP/byte) であり、カーネル間のベクトル再読込がボトルネックとなる。融合前のCG反復は7回のカーネル起動を行い、合計 nnz + 12n read, 4n write のメモリトラフィックが発生する (IC apply除く)。
+
+### 10.2 融合カーネル
+
+**Phase 1: SpMV + dot融合** — `cg_solver.hpp`
+
+```cpp
+Scalar pAp = parallel_reduce_sum<Scalar>(n, [&](index_t i) -> Scalar {
+    Scalar s = Scalar(0);
+    for (index_t k = A_rowptr[i]; k < A_rowptr[i + 1]; ++k)
+        s += A_vals[k] * p[A_colidx[k]];
+    Ap[i] = s;
+    return p[i] * s;  // dot(p, Ap) の部分和
+});
+```
+
+SpMV (`Ap = A*p`) と内積 (`pAp = dot(p, Ap)`) を1パスで計算。p[] と Ap[] の再読込 (2n read) を排除。
+
+**Phase 2: AXPY + norm融合**
+
+```cpp
+double norm_r_sq = parallel_reduce_sum<double>(n, [&](index_t i) -> double {
+    x[i] += alpha * p[i];
+    r[i] -= alpha * Ap[i];
+    return std::norm(r[i]);  // |r[i]|^2
+});
+```
+
+ベクトル更新 (`x += alpha*p`, `r -= alpha*Ap`) と残差ノルム計算を1パスで実行。r[] の再読込 (n read) を排除。
+
+**効果**: 反復あたり7カーネル → 5カーネル、メモリトラフィック約20%削減。
+
+### 10.3 ABMC並列auto_shift
+
+v2.3.0以前はauto_shift有効時にABMC並列IC分解が使えず、逐次パスにフォールバックしていた。v2.3.0でアトミックフラグ (`std::atomic<bool>`) によるリスタート機構を導入:
+
+1. ABMC色ごとの並列IC分解を実行
+2. いずれかのスレッドで対角breakdownを検出 → アトミックフラグをセット
+3. 色ループ終了時にフラグを確認 → シフト増加 → 元の値から全体リスタート
+
+ABMC順序はパターンベースのため、リスタート時に再計算は不要。
+
+**効果**: Hiruma渦電流問題 (HCurl p=1) で並列スケーリングが 1.5x → 2.6x に改善 (8コア)。
+
+### 10.4 ABMC空間CG (`abmc_reorder_spmv=True`)
+
+CGを完全にABMC並べ替え空間で実行するモード。SpMV、IC apply、ベクトル演算のすべてがABMC空間で行われる。
+
+利点:
+- IC apply時の入出力ベクトル置換 (scatter/gather) が不要
+- SpMVのキャッシュ局所性がABMCブロック構造と一致
+- パラメータ `abmc_reorder_spmv=True` で有効化
+
+**効果**: Hiruma問題で 2.7x → 2.85x (8コア)。
+
+---
+
+## 11. 既知の制限
+
+### 11.1 色数の非予測性
 
 `target_colors` はグリーディ彩色の下限であり、ブロック間の依存関係が密な場合に自動拡張される。複雑なメッシュ（ヘリカルコイル等）では指定値を大幅に超える可能性がある。
 
 **改善候補**: 実際の色数をログ出力して、ユーザーが確認できるようにする。
 
-### 10.2 ブロックサイズの自動調整
+### 11.2 ブロックサイズの自動調整
 
 現在 `block_size` (既定: 4) はユーザー指定の固定値。行列構造に応じた自動調整は未実装。
 
 ベンチマーク結果ではブロックサイズ 4〜16 の差は小さい（数%以内）。
 
-### 10.3 RCM事前並べ替えの限定的効果
+### 11.3 RCM事前並べ替えの限定的効果
 
 RCM は帯域幅縮小によりABMC彩色の色数を減らす可能性があるが、追加の行列コピーコストとセットアップ時間を要する。現在のベンチマークでは `abmc_use_rcm=False` と `True` の差は誤差範囲内であり、デフォルトは無効。
 
 ---
 
-## 11. 改善履歴
+## 12. 改善履歴
 
 このセクションでは、実装レビューに基づいて実施した改善を記録する。
 
-### 11.1 `block_rows` 配列の除去
+### 12.1 `block_rows` 配列の除去
 
 **課題**: `build_row_ordering()` で構築していた `block_rows[ridx]` は常に `ridx` に等しかった（新インデックスが連番で割り当てられるため、恒等写像）。三角解法で `i = block_rows[ridx]` とする代わりに `i = ridx` と書ける。
 
 **対応**: `ABMCSchedule` から `block_rows` メンバを削除。三角解法ループを `for (i = row_begin; i < row_end; ++i)` に簡素化。O(n) のメモリ削減。
 
-### 11.2 ワークベクトルの事前確保と共有
+### 12.2 ワークベクトルの事前確保と共有
 
 **課題**: レベルスケジューリングパスの `apply_level_schedule()` は毎回 `std::vector<Scalar> temp(size)` をヒープ割り当てしていた。ABMCパスは `setup()` 時に事前確保済みだったが、別の変数名 (`abmc_temp_`) で管理されていた。
 
 **対応**: `work_temp_` (と `work_temp2_`) を両パス共有のメンバ変数に統一。`setup()` 時に1回確保し、`apply()` 時のヒープ割り当てを完全に排除。
 
-### 11.3 `build_row_ordering` の未使用パラメータ除去
+### 12.3 `build_row_ordering` の未使用パラメータ除去
 
 **課題**: `color_graph()` の出力パラメータと `build_row_ordering()` のパラメータに未使用のものがあった。
 

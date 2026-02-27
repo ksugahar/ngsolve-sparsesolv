@@ -78,6 +78,34 @@ h-refinement convergence — the meshes differ in geometry discretization:
 - Despite non-convergence, ICCG ||B||^2 matches BDDC within 0.1% (best-iterate tracking)
 - **BDDC is essential for HCurl problems with high-contrast materials (mur=1000)**
 
+## Parallel Scaling: BDDC vs ABMC+ICCG (mesh1_2.5T, 8 cores)
+
+Two-step HCurl A-only formulation (DC phi first, then HCurl CG).
+155K HCurl DOFs, OMP_NUM_THREADS=8.
+
+| Solver | 1T [ms] | 8T [ms] | Speedup | Iters | ||B||^2 |
+|--------|--------:|--------:|--------:|------:|-----------|
+| BDDC (reg) | 6772 | 6361 | 1.06x | 2 | 1.634e-01 |
+| ABMC+ICCG | 147230 | 50895 | 2.89x | 5000 | 1.632e-01 |
+
+- BDDC: SparseSolv BDDCPreconditioner (MKL PARDISO coarse) + NGSolve CGSolver, regularization 1e-6
+- ICCG: SparseSolvSolver with `use_abmc=True, abmc_block_size=2, abmc_num_colors=4,
+  abmc_reorder_spmv=True, auto_shift=True`
+- BDDC converges in 2 iterations (MKL PARDISO coarse solver, v2.2.0+)
+- ICCG does not converge in 5000 iters but ||B||^2 matches BDDC within 0.1% (best-iterate)
+
+### Optimization effects on ICCG parallel speedup
+
+| Phase | 8-core Speedup | Description |
+|-------|-------------|-------------|
+| Baseline | ~1.5x | ABMC parallel IC apply only |
+| + ABMC auto_shift | ~2.6x | IC factorization also parallelized via ABMC |
+| + Fused CG kernels | ~2.7x | SpMV+dot, AXPY+norm fusion (~20% traffic reduction) |
+| + ABMC-space CG | ~2.89x | `abmc_reorder_spmv=True` eliminates permutation overhead |
+
+Theoretical max speedup is ~4x (DDR4 memory bandwidth saturation).
+The 2.89x achieved is ~72% of theoretical max.
+
 ## VTK Output
 
 VTK files (`eddy_current_mesh1_*.vtu`) contain:
