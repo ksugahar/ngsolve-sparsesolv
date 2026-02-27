@@ -40,3 +40,6 @@ results_*.json
 
 # Claude sessions
 .claude/
+
+# Original mesh files (gmsh v1 format, kept locally)
+**/original_msh1/
