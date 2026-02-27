@@ -79,13 +79,26 @@ protected:
         // rz_old = (r, z)
         Scalar rz_old = this->dot_product(r.data(), z.data(), n);
 
+        // Cache CSR pointers for fused SpMV+dot
+        const auto* A_rowptr = this->A_->row_ptr();
+        const auto* A_colidx = this->A_->col_idx();
+        const auto* A_vals = this->A_->values();
+
         // Main iteration loop
         for (int iter = 0; iter < config.max_iterations; ++iter) {
-            // Ap = A * p
-            this->A_->multiply(p.data(), Ap.data());
-
-            // alpha = (r, z) / (p, Ap)
-            Scalar pAp = this->dot_product(p.data(), Ap.data(), n);
+            // Fused: Ap = A*p AND pAp = (p, Ap) in single pass
+            // Avoids re-reading p[] and Ap[] for separate dot product
+            Scalar pAp = parallel_reduce_sum<Scalar>(n, [&](index_t i) -> Scalar {
+                Scalar s = Scalar(0);
+                for (index_t k = A_rowptr[i]; k < A_rowptr[i + 1]; ++k)
+                    s += A_vals[k] * p[A_colidx[k]];
+                Ap[i] = s;
+                if constexpr (!std::is_same_v<Scalar, double>) {
+                    return config.conjugate ? std::conj(p[i]) * s : p[i] * s;
+                } else {
+                    return p[i] * s;
+                }
+            });
 
             // Avoid division by zero
             if (std::abs(pAp) < constants::BREAKDOWN_THRESHOLD) {
@@ -99,15 +112,14 @@ protected:
 
             Scalar alpha = rz_old / pAp;
 
-            // x = x + alpha * p
-            // r = r - alpha * Ap
-            parallel_for(n, [&](index_t i) {
+            // Fused: x += alpha*p, r -= alpha*Ap, norm_r = ||r|| in single pass
+            // Avoids re-reading r[] for separate norm computation
+            double norm_r_sq = parallel_reduce_sum<double>(n, [&](index_t i) -> double {
                 x[i] += alpha * p[i];
                 r[i] -= alpha * Ap[i];
+                return std::norm(r[i]);  // |r[i]|^2
             });
-
-            // Compute residual norm
-            double norm_r = this->compute_norm(r.data(), n);
+            double norm_r = std::sqrt(norm_r_sq);
 
             // Check convergence
             if (this->check_convergence(norm_r, iter)) {
