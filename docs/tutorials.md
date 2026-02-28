@@ -327,7 +327,7 @@ FEM行列は複素対称 (A^T = A) であり、エルミート (A^H = A) では�
 | 問題の特徴 | 推奨手法 | 理由 |
 |-----------|---------|------|
 | H1, 高次 (order ≥ 3) | **BDDC+CG** | 反復2回。メッシュ非依存 |
-| H1, 低次 (order 1-2) | **ICCG** | p=1では全DOFがwirebasketでBDDC≈PARDISO直接法 |
+| H1, 低次 (order 1-2) | **ICCG** | p=1: BDDC≈PARDISO直接法、ICCG が 10倍以上高速 |
 | VectorH1 弾性体 | **BDDC+CG** | ICCGは弾性体で反復数増加 |
 | HCurl curl-curl (実数) | **BDDC+CG** or **Shifted-ICCG** | auto_shift有効化 |
 | HCurl 渦電流 (複素数) | **BDDC+CG** (conjugate=False) | SGS-MRTRは精度不足 |

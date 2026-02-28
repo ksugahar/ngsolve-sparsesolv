@@ -27,7 +27,7 @@ NGSolveには直接法ソルバーと組込みBDDCが搭載されている。Spa
 | 問題 | 有限要素空間 | 推奨手法 | 理由 |
 |------|------------|---------|------|
 | Poisson (高次) | H1 (order ≥ 3) | **BDDC+CG** | 2反復、メッシュ非依存 |
-| Poisson (低次) | H1 (order 1-2) | **ICCG** | p=1では全DOFがwirebasketでBDDC≈PARDISO直接法 |
+| Poisson (低次) | H1 (order 1-2) | **ICCG** | p=1: BDDC≈PARDISO直接法、ICCG が 10倍以上高速 |
 | 弾性体 | VectorH1 | **BDDC+CG** | ICCGは細分化で反復数増加 |
 | Curl-curl (実数) | HCurl (`nograds=True`) | **BDDC+CG** or **Shifted-ICCG** | BDDCはソース構成に非依存 |
 | 渦電流 (複素数) | HCurl (complex) | **BDDC+CG** (`conjugate=False`) | 複素対称行列対応 |
