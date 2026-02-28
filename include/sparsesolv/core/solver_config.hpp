@@ -74,8 +74,9 @@ struct SolverConfig {
     /// small or negative diagonal entries
     bool auto_shift = false;
 
-    /// Increment for automatic shift adjustment (default: 0.01)
-    double shift_increment = 0.01;
+    /// Initial increment for automatic shift adjustment (default: 0.05)
+    /// The increment doubles after each restart (exponential backoff)
+    double shift_increment = 0.05;
 
     /// Maximum allowed shift value during auto-adjustment (default: 5.0)
     double max_shift_value = 5.0;

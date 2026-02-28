@@ -421,11 +421,11 @@ public:
 
 | ソルバー | 反復数 | Wall Time | Speedup |
 |---------|--------|-----------|---------|
-| ICCG (level sched.) | 513 | 13.1s | 1.0x |
-| ICCG + ABMC (8色) | 444 | 7.4s | **1.8x** |
+| ICCG (level sched.) | 463 | 10.0s | 1.0x |
+| ICCG + ABMC (8色) | 415 | 6.0s | **1.7x** |
 
-単位立方体 (186K DOFs) では 1.28x、トロイダルコイル (148K DOFs) では 1.8x。差の要因:
-- **反復数**: 513 vs 79。反復数が多いほど三角解法の時間比率が大きくなり、ABMC の効果が顕著
+単位立方体 (186K DOFs) では 1.28x、トロイダルコイル (148K DOFs) では 1.7x。差の要因:
+- **反復数**: 463 vs 79。反復数が多いほど三角解法の時間比率が大きくなり、ABMC の効果が顕著
 - **行列構造**: トロイダルコイルは帯域幅が大きく、レベルスケジューリングのレベル数がより多い → 同期オーバーヘッドが大きい → ABMC の優位性が増す
 
 ### 7.4 損益分岐点
@@ -542,7 +542,23 @@ double norm_r_sq = parallel_reduce_sum<double>(n, [&](index_t i) -> double {
 
 ベクトル更新 (`x += alpha*p`, `r -= alpha*Ap`) と残差ノルム計算を1パスで実行。r[] の再読込 (n read) を排除。
 
-**効果**: 反復あたり7カーネル → 5カーネル、メモリトラフィック約20%削減。
+**Phase 3: 前処理適用 + dot(r, z) 融合** — `preconditioner.hpp`, `ic_preconditioner.hpp`
+
+```cpp
+// Preconditioner::apply_fused_dot() — 基底クラスの仮想メソッド
+Scalar apply_fused_dot(const Scalar* r_for_dot, const Scalar* x,
+                       Scalar* y, index_t size, bool conjugate) const {
+    apply(x, y, size);
+    return parallel_reduce_sum<Scalar>(size, [&](index_t i) -> Scalar {
+        return conjugate ? std::conj(r_for_dot[i]) * y[i]
+                         : r_for_dot[i] * y[i];
+    });
+}
+```
+
+IC前処理の各パスで `apply_fused_dot()` をオーバーライドし、後退代入の出力フェーズで `dot(r, z)` を同時計算する。ABMC空間パス (Path 1) では持続的並列領域内でスレッドローカルの部分和を蓄積し、最後にシリアルリダクションする。
+
+**効果**: 反復あたり7カーネル → 4カーネル、メモリトラフィック約25%削減。
 
 ### 10.3 ABMC並列auto_shift
 
@@ -550,8 +566,9 @@ v2.3.0以前はauto_shift有効時にABMC並列IC分解が使えず、逐次パ�
 
 1. ABMC色ごとの並列IC分解を実行
 2. いずれかのスレッドで対角breakdownを検出 → アトミックフラグをセット
-3. 色ループ終了時にフラグを確認 → シフト増加 → 元の値から全体リスタート
+3. 色ループ終了時にフラグを確認 → シフト増加 (指数バックオフ) → 元の値から全体リスタート
 
+シフト増加は指数バックオフ (`increment *= 2`) を採用し、少ないリスタート回数で適切なシフト値に到達する。
 ABMC順序はパターンベースのため、リスタート時に再計算は不要。
 
 **効果**: Hiruma渦電流問題 (HCurl p=1) で並列スケーリングが 1.5x → 2.6x に改善 (8コア)。
@@ -565,7 +582,39 @@ CGを完全にABMC並べ替え空間で実行するモード。SpMV、IC apply�
 - SpMVのキャッシュ局所性がABMCブロック構造と一致
 - パラメータ `abmc_reorder_spmv=True` で有効化
 
-**効果**: Hiruma問題で 2.7x → 2.85x (8コア)。
+**効果**: Hiruma問題で 2.7x → 2.89x (8コア)。
+
+### 10.5 持続的並列領域 + dot(r,z)融合 (`apply_fused_dot`)
+
+`apply_in_reordered_space()` (ABMC空間CGパス) は、各色ごとに `forward_substitution_abmc()` / `backward_substitution_abmc()` を呼び出し、合計 2*nc 回の `parallel_for` ディスパッチを行っていた。これを `apply_abmc()` と同様の持続的並列領域 (1 dispatch + 2*nc barriers) に変換し、さらに後退代入の最終出力で `dot(r, z)` を同時計算する。
+
+`apply_in_reordered_space_fused_dot()` の構造:
+
+```cpp
+parallel_for(nthreads, [&](index_t tid) {
+    // Forward substitution (color-sequential, block-parallel)
+    for (index_t c = 0; c < nc; ++c) {
+        // ... my blocks in color c ...
+        barrier.wait();
+    }
+    // Backward substitution + dot accumulation
+    Scalar local_dot = 0;
+    for (index_t c = nc; c-- > 0;) {
+        // ... backward solve for my blocks ...
+        // On final write: local_dot += r[i] * y[i];
+        barrier.wait();
+    }
+    partial_dots[tid] = local_dot;
+});
+// Serial reduction of partial sums
+```
+
+全3パスに対応:
+- **Path 1** (`abmc_reorder_spmv=True`): `apply_in_reordered_space_fused_dot()`
+- **Path 2** (RCM+ABMC): `apply_rcm_abmc_fused_dot()`
+- **Path 3** (標準ABMC): `apply_abmc_fused_dot()` — Phase 4 (出力置換) でdot融合
+
+**効果**: Hiruma問題で 2.89x → 3.14x (8コア, 理論最大4xの79%)。
 
 ---
 

@@ -137,6 +137,12 @@ for (size_t d = 0; d < ndof; ++d) {
 | H1 | 全頂点=WB | 頂点=WB, 辺=IF | 頂点=WB, 辺/面/内部=IF |
 | HCurl | 辺=WB | 辺=WB, 面=IF | 辺=WB, 面/内部(LOCAL)=IF |
 
+> **order=1 での注意**: order=1 では全DOFが Wirebasket に分類され、Interface DOF が存在しない。
+> この場合、BDDC の粗空間は元の問題と同サイズになり、粗空間ソルバー (MKL PARDISO) が
+> 事実上の疎直接法として全DOFを解く。したがって BDDC の計算時間は PARDISO 直接法と
+> 同程度になり、BDDC による前処理の利点がない。order≥2 で Interface DOF が出現し、
+> 粗空間が縮小されることで初めて BDDC の反復回数削減効果が発揮される。
+
 **自由度マスクの取得**:
 
 ```cpp

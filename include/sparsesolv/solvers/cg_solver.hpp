@@ -70,14 +70,11 @@ protected:
         Scalar* x = this->x_;
         const auto& config = this->config_;
 
-        // Apply preconditioner: z = M^{-1} * r
-        this->apply_preconditioner();
+        // Fused: z = M^{-1} * r AND rz_old = dot(r, z)
+        Scalar rz_old = this->apply_preconditioner_fused_dot();
 
         // p = z
         std::copy(z.begin(), z.end(), p.begin());
-
-        // rz_old = (r, z)
-        Scalar rz_old = this->dot_product(r.data(), z.data(), n);
 
         // Cache CSR pointers for fused SpMV+dot
         const auto* A_rowptr = this->A_->row_ptr();
@@ -131,11 +128,9 @@ protected:
                 return this->build_result(false, iter + 1, norm_r);
             }
 
-            // z = M^{-1} * r
-            this->apply_preconditioner();
-
-            // beta = (r_new, z_new) / (r_old, z_old)
-            Scalar rz_new = this->dot_product(r.data(), z.data(), n);
+            // Fused: z = M^{-1} * r AND rz_new = dot(r, z) in one pass
+            // Avoids a separate kernel launch for the dot product
+            Scalar rz_new = this->apply_preconditioner_fused_dot();
             Scalar beta = rz_new / rz_old;
             rz_old = rz_new;
 

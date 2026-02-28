@@ -31,6 +31,39 @@ public:
         apply(x.data(), y.data(), static_cast<index_t>(x.size()));
     }
 
+    /**
+     * @brief Apply preconditioner and compute dot product in one pass
+     *
+     * Computes y = M^{-1}*x and returns dot(r_for_dot, y).
+     * Fusing avoids a separate pass over y[] for the dot product.
+     *
+     * Default implementation calls apply() then computes dot separately.
+     * Derived classes (e.g., ICPreconditioner with ABMC) override this
+     * to fuse the dot into the output phase.
+     *
+     * @param r_for_dot Vector to dot with the output (typically CG residual)
+     * @param x Input vector
+     * @param y Output vector (M^{-1}*x)
+     * @param size Vector size
+     * @param conjugate If true, compute conj(r_for_dot) . y (Hermitian)
+     * @return dot(r_for_dot, y)
+     */
+    virtual Scalar apply_fused_dot(
+        const Scalar* r_for_dot,
+        const Scalar* x, Scalar* y,
+        index_t size, bool conjugate) const
+    {
+        apply(x, y, size);
+        return parallel_reduce_sum<Scalar>(size, [&](index_t i) -> Scalar {
+            if constexpr (!std::is_same_v<Scalar, double>) {
+                return conjugate ? std::conj(r_for_dot[i]) * y[i]
+                                 : r_for_dot[i] * y[i];
+            } else {
+                return r_for_dot[i] * y[i];
+            }
+        });
+    }
+
     virtual std::string name() const = 0;
     virtual bool is_ready() const { return is_setup_; }
 

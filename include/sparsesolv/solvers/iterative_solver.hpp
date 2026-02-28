@@ -192,6 +192,23 @@ protected:
     }
 
     /**
+     * @brief Apply preconditioner and compute dot(r, z) in one pass
+     *
+     * Computes z = M^{-1}*r and returns dot(r, z), fused to avoid
+     * a separate kernel launch for the dot product.
+     */
+    Scalar apply_preconditioner_fused_dot() {
+        if (precond_) {
+            return precond_->apply_fused_dot(
+                r_.data(), r_.data(), z_.data(), size_, config_.conjugate);
+        } else {
+            // No preconditioning: z = r, return dot(r, r)
+            std::copy(r_.begin(), r_.end(), z_.begin());
+            return dot_product(r_.data(), z_.data(), size_);
+        }
+    }
+
+    /**
      * @brief Check convergence and update tracking
      * @param norm_r Current residual norm (unnormalized)
      * @param iter Current iteration number

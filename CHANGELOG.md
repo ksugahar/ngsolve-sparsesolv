@@ -16,11 +16,18 @@
 - CG反復のカーネル融合 — メモリトラフィック約20%削減
   - SpMV + dot(p, Ap) を1パスに融合 (p[], Ap[] の再読込排除)
   - AXPY + 残差ノルム計算を1パスに融合 (r[] の再読込排除)
-  - 反復あたりのカーネル起動を7回から5回に削減
+  - 前処理適用 + dot(r, z) を1パスに融合 (`apply_fused_dot`)
+  - 反復あたりのカーネル起動を7回から4回に削減
+- `apply_in_reordered_space` (ABMC空間CGパス) を持続的並列領域に変換
+  - 従来: 2*nc回の parallel_for dispatch (nc=色数)
+  - 改善: 1回の dispatch + 2*nc回の SpinBarrier (`apply_abmc` と同等)
 - ABMC並列IC分解でauto_shift対応 (アトミックフラグによるリスタート)
   - 従来: auto_shift有効時はABMC並列パスが使えず逐次IC分解にフォールバック
   - 改善: 並列分解中にbreakdownを検出→シフト増加→全体リスタートで完全並列化
-- Hiruma HCurl p=1 渦電流問題で並列スケーリング 1.5x → 2.85x (8コア)
+- Hiruma HCurl p=1 渦電流問題で並列スケーリング 1.5x → 3.14x (8コア)
+- auto_shiftの指数バックオフ (`increment *= 2`) — リスタート回数を大幅削減
+- デフォルト `shift_increment` を 0.01 → 0.05 に変更
+- ノートブック (NB02, NB04) のシフト値を 1.5 → 1.15 に最適化 (反復数 ~7% 改善)
 
 ## [2.2.0] - 2026-02-25
 

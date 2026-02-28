@@ -314,6 +314,187 @@ public:
         }
     }
 
+    /**
+     * @brief Apply in reordered space + compute dot(r, z) in one pass
+     *
+     * Persistent parallel region (1 dispatch + 2*nc barriers) instead of
+     * 2*nc separate parallel_for launches. Fuses dot(r_for_dot, y) into
+     * the backward substitution output phase.
+     */
+    Scalar apply_in_reordered_space_fused_dot(
+        const Scalar* r_for_dot,
+        const Scalar* x, Scalar* y,
+        index_t size, bool conjugate) const
+    {
+        const int nthreads = get_num_threads();
+        const index_t nc = abmc_schedule_.num_colors();
+        const bool use_scaling = config_.diagonal_scaling && !scaling_.empty();
+
+        if (nthreads <= 1) {
+            // Serial path: reuse existing logic + dot
+            apply_in_reordered_space(x, y, size);
+            Scalar dot = Scalar(0);
+            for (index_t i = 0; i < size; ++i) {
+                if constexpr (!std::is_same_v<Scalar, double>) {
+                    dot += conjugate ? std::conj(r_for_dot[i]) * y[i]
+                                     : r_for_dot[i] * y[i];
+                } else {
+                    dot += r_for_dot[i] * y[i];
+                }
+            }
+            return dot;
+        }
+
+        Scalar* work_x = abmc_x_perm_.data();
+        Scalar* temp = work_temp_.data();
+        std::vector<Scalar> partial_dots(nthreads, Scalar(0));
+
+        SpinBarrier barrier(nthreads);
+
+        parallel_for(static_cast<index_t>(nthreads), [&](index_t tid) {
+            const index_t i0 = size * tid / nthreads;
+            const index_t i1 = size * (tid + 1) / nthreads;
+
+            // Phase 1: Scale input (fused into persistent region)
+            if (use_scaling) {
+                for (index_t i = i0; i < i1; ++i)
+                    work_x[i] = x[i] * static_cast<Scalar>(scaling_[i]);
+                barrier.wait();
+            }
+            const Scalar* fwd_input = use_scaling ? work_x : x;
+
+            // Phase 2: Forward substitution (color-sequential, block-parallel)
+            for (index_t c = 0; c < nc; ++c) {
+                const index_t blk_begin = abmc_schedule_.color_offsets[c];
+                const index_t blk_end = abmc_schedule_.color_offsets[c + 1];
+                const index_t num_blocks = blk_end - blk_begin;
+                const index_t my_start = num_blocks * tid / nthreads;
+                const index_t my_end = num_blocks * (tid + 1) / nthreads;
+
+                for (index_t bidx = my_start; bidx < my_end; ++bidx) {
+                    const index_t blk = abmc_schedule_.color_blocks[blk_begin + bidx];
+                    const index_t row_begin = abmc_schedule_.block_offsets[blk];
+                    const index_t row_end = abmc_schedule_.block_offsets[blk + 1];
+                    for (index_t i = row_begin; i < row_end; ++i) {
+                        Scalar s = fwd_input[i];
+                        const index_t l_start = L_.row_ptr[i];
+                        const index_t l_end = L_.row_ptr[i + 1] - 1;
+                        for (index_t k = l_start; k < l_end; ++k)
+                            s -= L_.values[k] * temp[L_.col_idx[k]];
+                        temp[i] = s / L_.values[l_end];
+                    }
+                }
+                barrier.wait();
+            }
+
+            // Phase 3: Backward substitution + dot accumulation
+            Scalar local_dot = Scalar(0);
+            for (index_t c = nc; c-- > 0;) {
+                const index_t blk_begin = abmc_schedule_.color_offsets[c];
+                const index_t blk_end = abmc_schedule_.color_offsets[c + 1];
+                const index_t num_blocks = blk_end - blk_begin;
+                const index_t my_start = num_blocks * tid / nthreads;
+                const index_t my_end = num_blocks * (tid + 1) / nthreads;
+
+                for (index_t bidx = my_start; bidx < my_end; ++bidx) {
+                    const index_t blk = abmc_schedule_.color_blocks[blk_begin + bidx];
+                    const index_t row_begin = abmc_schedule_.block_offsets[blk];
+                    const index_t row_end = abmc_schedule_.block_offsets[blk + 1];
+                    for (index_t i = row_end; i-- > row_begin;) {
+                        Scalar s = Scalar(0);
+                        const index_t lt_start = Lt_.row_ptr[i] + 1;
+                        const index_t lt_end = Lt_.row_ptr[i + 1];
+                        for (index_t k = lt_start; k < lt_end; ++k)
+                            s -= Lt_.values[k] * y[Lt_.col_idx[k]];
+                        Scalar yi = s * inv_diag_[i] + temp[i];
+                        if (use_scaling) yi *= static_cast<Scalar>(scaling_[i]);
+                        y[i] = yi;
+                        if constexpr (!std::is_same_v<Scalar, double>) {
+                            local_dot += conjugate ? std::conj(r_for_dot[i]) * yi
+                                                   : r_for_dot[i] * yi;
+                        } else {
+                            local_dot += r_for_dot[i] * yi;
+                        }
+                    }
+                }
+                barrier.wait();
+            }
+            partial_dots[tid] = local_dot;
+        });
+
+        Scalar total = Scalar(0);
+        for (int t = 0; t < nthreads; ++t) total += partial_dots[t];
+        return total;
+    }
+
+    /**
+     * @brief Apply RCM+ABMC + compute dot(r, z) in one pass
+     *
+     * For Path 2: CG in RCM space. Fuses output permutation + scaling
+     * with dot product computation.
+     */
+    Scalar apply_rcm_abmc_fused_dot(
+        const Scalar* r_for_dot,
+        const Scalar* x, Scalar* y,
+        index_t size, bool conjugate) const
+    {
+        const auto& perm = composite_perm_rcm_;
+        const bool use_scaling = config_.diagonal_scaling && !scaling_.empty();
+
+        // Permute input + scale
+        if (use_scaling) {
+            parallel_for(size, [&](index_t i) {
+                abmc_x_perm_[perm[i]] = x[i] *
+                    static_cast<Scalar>(scaling_[perm[i]]);
+            });
+        } else {
+            parallel_for(size, [&](index_t i) {
+                abmc_x_perm_[perm[i]] = x[i];
+            });
+        }
+
+        // Triangular solves
+        forward_substitution_abmc(abmc_x_perm_.data(), work_temp_.data());
+        backward_substitution_abmc(work_temp_.data(), abmc_y_perm_.data());
+
+        // Fused: permute output + dot
+        return parallel_reduce_sum<Scalar>(size, [&](index_t i) -> Scalar {
+            Scalar yi;
+            if (use_scaling) {
+                yi = abmc_y_perm_[perm[i]] *
+                    static_cast<Scalar>(scaling_[perm[i]]);
+            } else {
+                yi = abmc_y_perm_[perm[i]];
+            }
+            y[i] = yi;
+            if constexpr (!std::is_same_v<Scalar, double>) {
+                return conjugate ? std::conj(r_for_dot[i]) * yi
+                                 : r_for_dot[i] * yi;
+            } else {
+                return r_for_dot[i] * yi;
+            }
+        });
+    }
+
+    /// Override base class apply_fused_dot for optimized ABMC paths
+    Scalar apply_fused_dot(
+        const Scalar* r_for_dot,
+        const Scalar* x, Scalar* y,
+        index_t size, bool conjugate) const override
+    {
+        if (!this->is_setup_) {
+            throw std::runtime_error("ICPreconditioner::apply_fused_dot called before setup");
+        }
+
+        if (config_.use_abmc && abmc_schedule_.is_built()) {
+            return apply_abmc_fused_dot(r_for_dot, x, y, size, conjugate);
+        }
+
+        // Non-ABMC path: use default (apply + separate dot)
+        return Preconditioner<Scalar>::apply_fused_dot(
+            r_for_dot, x, y, size, conjugate);
+    }
+
 private:
     double shift_parameter_;
     double actual_shift_ = 0.0;      // Actual shift used (after auto-adjustment)
@@ -553,6 +734,141 @@ private:
             for (index_t i = 0; i < size; ++i)
                 y[i] = abmc_y_perm_[perm[i]];
         }
+    }
+
+    /**
+     * @brief Apply ABMC + compute dot(r, z) in one pass (Path 3)
+     *
+     * Same persistent parallel region as apply_abmc(), but fuses
+     * dot(r_for_dot, y) into Phase 4 (output permutation).
+     */
+    Scalar apply_abmc_fused_dot(
+        const Scalar* r_for_dot,
+        const Scalar* x, Scalar* y,
+        index_t size, bool conjugate) const
+    {
+        const int nthreads = get_num_threads();
+
+        if (nthreads <= 1) {
+            // Serial: apply + dot
+            apply_abmc_serial(x, y, size);
+            Scalar dot = Scalar(0);
+            for (index_t i = 0; i < size; ++i) {
+                if constexpr (!std::is_same_v<Scalar, double>) {
+                    dot += conjugate ? std::conj(r_for_dot[i]) * y[i]
+                                     : r_for_dot[i] * y[i];
+                } else {
+                    dot += r_for_dot[i] * y[i];
+                }
+            }
+            return dot;
+        }
+
+        const auto& perm = composite_perm_;
+        const bool use_scaling = config_.diagonal_scaling && !composite_scaling_.empty();
+        const index_t nc = abmc_schedule_.num_colors();
+
+        Scalar* xp = abmc_x_perm_.data();
+        Scalar* temp = work_temp_.data();
+        Scalar* yp = abmc_y_perm_.data();
+        std::vector<Scalar> partial_dots(nthreads, Scalar(0));
+
+        {
+            SpinBarrier barrier(nthreads);
+
+            parallel_for(static_cast<index_t>(nthreads), [&](index_t tid) {
+                // Phase 1: Permute input (same as apply_abmc)
+                const index_t perm_start = size * tid / nthreads;
+                const index_t perm_end = size * (tid + 1) / nthreads;
+                if (use_scaling) {
+                    for (index_t i = perm_start; i < perm_end; ++i)
+                        xp[perm[i]] = x[i] * static_cast<Scalar>(composite_scaling_[i]);
+                } else {
+                    for (index_t i = perm_start; i < perm_end; ++i)
+                        xp[perm[i]] = x[i];
+                }
+                barrier.wait();
+
+                // Phase 2: Forward substitution (same as apply_abmc)
+                for (index_t c = 0; c < nc; ++c) {
+                    const index_t blk_begin = abmc_schedule_.color_offsets[c];
+                    const index_t blk_end = abmc_schedule_.color_offsets[c + 1];
+                    const index_t num_blocks = blk_end - blk_begin;
+                    const index_t my_start = num_blocks * tid / nthreads;
+                    const index_t my_end = num_blocks * (tid + 1) / nthreads;
+
+                    for (index_t bidx = my_start; bidx < my_end; ++bidx) {
+                        const index_t blk = abmc_schedule_.color_blocks[blk_begin + bidx];
+                        const index_t row_begin = abmc_schedule_.block_offsets[blk];
+                        const index_t row_end = abmc_schedule_.block_offsets[blk + 1];
+                        for (index_t i = row_begin; i < row_end; ++i) {
+                            Scalar s = xp[i];
+                            const index_t l_start = L_.row_ptr[i];
+                            const index_t l_end = L_.row_ptr[i + 1] - 1;
+                            for (index_t k = l_start; k < l_end; ++k)
+                                s -= L_.values[k] * temp[L_.col_idx[k]];
+                            temp[i] = s / L_.values[l_end];
+                        }
+                    }
+                    barrier.wait();
+                }
+
+                // Phase 3: Backward substitution (same as apply_abmc)
+                for (index_t c = nc; c-- > 0;) {
+                    const index_t blk_begin = abmc_schedule_.color_offsets[c];
+                    const index_t blk_end = abmc_schedule_.color_offsets[c + 1];
+                    const index_t num_blocks = blk_end - blk_begin;
+                    const index_t my_start = num_blocks * tid / nthreads;
+                    const index_t my_end = num_blocks * (tid + 1) / nthreads;
+
+                    for (index_t bidx = my_start; bidx < my_end; ++bidx) {
+                        const index_t blk = abmc_schedule_.color_blocks[blk_begin + bidx];
+                        const index_t row_begin = abmc_schedule_.block_offsets[blk];
+                        const index_t row_end = abmc_schedule_.block_offsets[blk + 1];
+                        for (index_t i = row_end; i-- > row_begin;) {
+                            Scalar s = Scalar(0);
+                            const index_t lt_start = Lt_.row_ptr[i] + 1;
+                            const index_t lt_end = Lt_.row_ptr[i + 1];
+                            for (index_t k = lt_start; k < lt_end; ++k)
+                                s -= Lt_.values[k] * yp[Lt_.col_idx[k]];
+                            yp[i] = s * inv_diag_[i] + temp[i];
+                        }
+                    }
+                    barrier.wait();
+                }
+
+                // Phase 4: Permute output + dot accumulation (fused)
+                Scalar local_dot = Scalar(0);
+                if (use_scaling) {
+                    for (index_t i = perm_start; i < perm_end; ++i) {
+                        Scalar yi = yp[perm[i]] * static_cast<Scalar>(composite_scaling_[i]);
+                        y[i] = yi;
+                        if constexpr (!std::is_same_v<Scalar, double>) {
+                            local_dot += conjugate ? std::conj(r_for_dot[i]) * yi
+                                                   : r_for_dot[i] * yi;
+                        } else {
+                            local_dot += r_for_dot[i] * yi;
+                        }
+                    }
+                } else {
+                    for (index_t i = perm_start; i < perm_end; ++i) {
+                        Scalar yi = yp[perm[i]];
+                        y[i] = yi;
+                        if constexpr (!std::is_same_v<Scalar, double>) {
+                            local_dot += conjugate ? std::conj(r_for_dot[i]) * yi
+                                                   : r_for_dot[i] * yi;
+                        } else {
+                            local_dot += r_for_dot[i] * yi;
+                        }
+                    }
+                }
+                partial_dots[tid] = local_dot;
+            });
+        }
+
+        Scalar total = Scalar(0);
+        for (int t = 0; t < nthreads; ++t) total += partial_dots[t];
+        return total;
     }
 
     // ================================================================
@@ -807,6 +1123,7 @@ private:
 
         double shift = shift_parameter_;
         actual_shift_ = shift;
+        double increment = config_.shift_increment;
 
         bool restart = true;
         int shift_trials = 0;
@@ -890,7 +1207,8 @@ private:
                     if (abs_s < config_.min_diagonal_threshold && abs_orig > 0.0) {
                         if (shift < config_.max_shift_value &&
                             shift_trials < config_.max_shift_trials) {
-                            shift += config_.shift_increment;
+                            shift += increment;
+                            increment *= 2;  // exponential backoff
                             shift_trials++;
                             restart = true;
                             break; // Restart factorization with new shift
@@ -930,6 +1248,7 @@ private:
         inv_diag_.resize(n);
 
         double shift = shift_parameter_;
+        double increment = config_.shift_increment;
         bool restart = true;
         int shift_trials = 0;
 
@@ -1041,7 +1360,8 @@ private:
                 if (config_.auto_shift && need_restart.load()) {
                     if (shift < config_.max_shift_value
                         && shift_trials < config_.max_shift_trials) {
-                        shift += config_.shift_increment;
+                        shift += increment;
+                        increment *= 2;  // exponential backoff
                         shift_trials++;
                         restart = true;
                         break;  // exit color loop, restart outer while
@@ -1205,6 +1525,15 @@ public:
         precond_.apply_in_reordered_space(x, y, size);
     }
 
+    Scalar apply_fused_dot(
+        const Scalar* r_for_dot,
+        const Scalar* x, Scalar* y,
+        index_t size, bool conjugate) const override
+    {
+        return precond_.apply_in_reordered_space_fused_dot(
+            r_for_dot, x, y, size, conjugate);
+    }
+
     std::string name() const override { return "IC-Reordered"; }
 
 private:
@@ -1233,6 +1562,15 @@ public:
 
     void apply(const Scalar* x, Scalar* y, index_t size) const override {
         precond_.apply_rcm_abmc(x, y, size);
+    }
+
+    Scalar apply_fused_dot(
+        const Scalar* r_for_dot,
+        const Scalar* x, Scalar* y,
+        index_t size, bool conjugate) const override
+    {
+        return precond_.apply_rcm_abmc_fused_dot(
+            r_for_dot, x, y, size, conjugate);
     }
 
     std::string name() const override { return "IC-RCM-ABMC"; }

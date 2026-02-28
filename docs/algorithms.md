@@ -181,8 +181,9 @@ IC分解が破綻することがある。Auto-shiftはこれを自動検出し�
 ```cpp
 // ic_preconditioner.hpp: compute_ic_factorization()
 if (abs_s < config_.min_diagonal_threshold && abs_orig > 0.0) {
-    shift += config_.shift_increment;  // シフト増加
-    restart = true;                     // 分解を再開
+    shift += increment;     // シフト増加
+    increment *= 2;         // 指数バックオフ
+    restart = true;          // 分解を再開
 }
 ```
 

@@ -27,7 +27,7 @@ NGSolveには直接法ソルバーと組込みBDDCが搭載されている。Spa
 | 問題 | 有限要素空間 | 推奨手法 | 理由 |
 |------|------------|---------|------|
 | Poisson (高次) | H1 (order ≥ 3) | **BDDC+CG** | 2反復、メッシュ非依存 |
-| Poisson (低次) | H1 (order 1-2) | **ICCG** | BDDCのセットアップコスト不要 |
+| Poisson (低次) | H1 (order 1-2) | **ICCG** | p=1では全DOFがwirebasketでBDDC≈PARDISO直接法 |
 | 弾性体 | VectorH1 | **BDDC+CG** | ICCGは細分化で反復数増加 |
 | Curl-curl (実数) | HCurl (`nograds=True`) | **BDDC+CG** or **Shifted-ICCG** | BDDCはソース構成に非依存 |
 | 渦電流 (複素数) | HCurl (complex) | **BDDC+CG** (`conjugate=False`) | 複素対称行列対応 |
@@ -37,27 +37,28 @@ NGSolveには直接法ソルバーと組込みBDDCが搭載されている。Spa
 
 ## 性能
 
-3D HCurl curl-curl問題でのベンチマーク (8スレッド, `nograds=True`)。
-詳細は [02_performance_comparison.ipynb](docs/02_performance_comparison.ipynb)。
+3D HCurl curl-curl問題でのベンチマーク (`nograds=True`)。
 
-**トロイダルコイル** (148K DOFs, order 2 — div-freeソース):
+**トロイダルコイル** (148K DOFs, order 2, 8スレッド — div-freeソース):
 
 | ソルバー | 反復数 | 計算時間 | vs ICCG |
 |---------|--------|---------|---------|
-| ICCG | 513 | 12.3 s | 1.0x |
-| ICCG + ABMC (8色) | 444 | 6.6 s | **1.9x** |
-| BDDC | 46 | 2.9 s | **4.2x** |
+| ICCG | 463 | 4.4 s | 1.0x |
+| ICCG + ABMC (8色) | 414 | 2.6 s | **1.7x** |
+| BDDC | 46 | 2.1 s | **2.1x** |
 
-ABMCは三角解法のボトルネックを並列化し、ICCG計算時間をほぼ半減。
+詳細は [04_abmc_parallel_performance.ipynb](docs/04_abmc_parallel_performance.ipynb)。
+ABMCは三角解法のボトルネックを並列化し、ICCG計算時間を短縮。
 BDDCはメッシュ非依存の収束でさらに高速。
 
-**ヘリカルコイル** (565K DOFs, order 2 — ソース構成の堅牢性):
+**ヘリカルコイル** (565K DOFs, order 2, 1スレッド — ソース構成の堅牢性):
 
 | ソース構成 | ICCG | BDDC |
 |-----------|------|------|
-| ポテンシャルベース `J*v*dx` (非div-free) | 1000反復, **不収束** | 35反復, 収束 |
-| curl-based `T*curl(v)*dx` (div-free) | 161反復, 収束 | 53反復, 収束 |
+| ポテンシャルベース `J*v*dx` (非div-free) | 1000反復, **不収束** | 33反復, 収束 |
+| curl-based `T*curl(v)*dx` (div-free) | 119反復, 収束 | 53反復, 収束 |
 
+詳細は [02_performance_comparison.ipynb](docs/02_performance_comparison.ipynb)。
 ICCGはソースが離散的にdiv-freeであることを要求する — 実際には保証しにくい条件。
 BDDCはソース構成に関わらず収束する。
 
@@ -203,7 +204,7 @@ gfu.vec.data = solver * f.vec
 ABMCアルゴリズムは近傍の行をブロックに集約 (BFS集約) した後、
 ブロック隣接グラフを彩色して同色ブロック間の下三角依存関係を排除する。
 三角解法では色を逐次処理し、各色内のブロックを並列に実行する。
-148K DOF HCurl問題 (8スレッド) で、ABMCはICCG計算時間を12.3秒から6.6秒に短縮 (1.9倍高速化)。
+148K DOF HCurl問題 (8スレッド) で、ABMCはICCG計算時間を4.4秒から2.6秒に短縮 (1.7倍高速化)。
 
 ### 前処理 + NGSolve CGSolver
 
