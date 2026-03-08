@@ -259,7 +259,7 @@ if (std::abs(denom) < constants::DENOMINATOR_BREAKDOWN) {
 
 複素対称行列 (A^T = A) の渦電流問題では、DAD変換が最適でない可能性があり、
 収束精度が5%程度にとどまる場合がある。こうした場合はICCG+ABMC、COCR、
-またはHYPRE AMS+GMRESを推奨する。
+またはHYPRE AMS+BiCGStabを推奨する。
 
 ---
 
@@ -692,7 +692,7 @@ HYPRE AMSの2インスタンスをNGSolve TaskManagerで並列実行する。
 **特徴**:
 - HYPRE AMSの高品質な反復数 (成熟した20年以上の開発)
 - TaskManagerによるRe/Im並列化で約1.5x高速化
-- HYPRE AMSは非対称 → GMResSolver必須
+- HYPRE AMSは非対称 → BiCGStabSolver推奨
 
 **実装ファイル**: `preconditioners/hypre_ams_preconditioner.hpp`
 
@@ -732,21 +732,22 @@ y = y_re + j * y_im        (TaskManagerで並列実行)
 HYPREの内部ベクトル (`hyp_b_`, `hyp_x_`) はスレッドセーフではないため、
 同一インスタンスの並列呼び出しは不可。
 
-### 9.4 ベンチマーク結果 (GMRES, tol=1e-8)
+### 9.4 ベンチマーク結果 (BiCGStab, tol=1e-8)
 
 | メッシュ | DOFs | Python (逐次) | C++ TaskManager | 高速化 |
 |---------|-----:|---:|---:|---:|
-| 2.5T | 155k | 5.40s, 50 it | **3.43s, 50 it** | **1.57x** |
-| 5.5T | 331k | 14.98s, 59 it | **10.19s, 59 it** | **1.47x** |
-| 20.5T | 1.44M | 103.09s, 75 it | **69.16s, 75 it** | **1.49x** |
+| 2.5T | 155k | 4.72s, 26 it | **2.67s, 26 it** | **1.77x** |
+| 5.5T | 331k | 10.56s, 26 it | **6.49s, 26 it** | **1.63x** |
+| 20.5T | 1.44M | 54.80s, 26 it | **37.17s, 26 it** | **1.47x** |
 
-反復数は同一 — 数学的に同じ処理、並列化のみ異なる。
+BiCGStabにより全メッシュサイズで反復数が26回に統一され、
+GMRESと比較して反復数が50-65%削減された。
 
 ### 9.5 Python使用例
 
 ```python
 import sparsesolv_ngsolve as ssn
-from ngsolve.krylovspace import GMResSolver
+from bicgstab_solver import BiCGStabSolver
 
 pre = ssn.ComplexHypreAMSPreconditioner(
     a_real_mat=a_real.mat, grad_mat=G_mat,
@@ -755,7 +756,7 @@ pre = ssn.ComplexHypreAMSPreconditioner(
     ndof_complex=fes.ndof, cycle_type=1, print_level=0)
 
 with TaskManager():
-    inv = GMResSolver(mat=a.mat, pre=pre, maxiter=500, tol=1e-8)
+    inv = BiCGStabSolver(mat=a.mat, pre=pre, maxiter=500, tol=1e-8)
     gfu.vec.data = inv * f.vec
 ```
 
@@ -773,8 +774,8 @@ with TaskManager():
 | **空間構造の利用** | なし (代数的) | 要素構造 (wirebasket) | Helmholtz分解 (G, Pi) |
 | **多段階性** | 1レベル (IC前処理) | 2レベル (粗空間+局所) | 多レベル (AMG階層) |
 | **前処理の対称性** | **対称** | **対称** | **非対称** (デフォルト) |
-| **Krylovソルバー** | CG / COCR | CG / COCR | **GMRES必須** |
-| **メモリ効率** | **最良** | 中 | 大 (GMRES基底 + AMG階層) |
+| **Krylovソルバー** | CG / COCR | CG / COCR | **BiCGStab推奨** |
+| **メモリ効率** | **最良** | 中 | 良 (BiCGStab固定8ベクトル + AMG階層) |
 | **セットアップコスト** | 低 | 高 | 中 |
 | **反復数スケーリング** | h依存 (悪化) | h非依存 | h準非依存 |
 
@@ -790,15 +791,15 @@ with TaskManager():
 - 要素ごとの Schur 補体: O(Σ n_wb^(e)^2)
 - CG: 約5本の作業ベクトル
 
-**HYPRE AMS + GMRES**:
-- GMRES Krylov基底: m反復 × N DOFs × 16 bytes (complex)
-  - 例: 75反復 × 1.44M DOFs × 16B ≈ **1.7 GB**
+**HYPRE AMS + BiCGStab**:
+- BiCGStab作業ベクトル: 固定8ベクトル × N DOFs × 16 bytes (complex)
+  - 例: 8 × 1.44M DOFs × 16B ≈ **184 MB** (GMRESの75ベクトル ≈ 1.7 GBから大幅削減)
 - HYPRE内部AMG階層: 2つの BoomerAMG (Pi, G)
 - 2インスタンス (Re/Im並列) で上記の2倍
-- CG比で約10-20倍のメモリ
+- CG比で約2-3倍のメモリ (GMRESの10-20倍から大幅改善)
 
-**トレードオフ**: HYPRE AMS+GMRESはメモリ使用量でABMC ICCGに劣るが、
-大規模HCurl問題での反復数の安定性が決定的な利点となる。
+**トレードオフ**: HYPRE AMS+BiCGStabはGMRES比でメモリ使用量を大幅に削減しつつ、
+反復数も26回に統一され (GMRES: 50-75回)、大規模HCurl問題で最適な選択肢となる。
 
 ### 10.3 なぜ HYPRE AMS が HCurl 渦電流に有効か
 
@@ -840,7 +841,7 @@ ICCGのauto-shiftは一様なシフトしかできず、領域ごとの最適化
 ### 10.4 HYPRE AMS の対称化と CG 互換性
 
 HYPRE AMS のデフォルト設定では内部 BoomerAMG が hybrid GS (relax_type=3) を使用するため、
-前処理全体が非対称となり GMRES が必須。
+前処理全体が非対称となり BiCGStab が必要。
 
 ただし、全スムーザを対称型に設定すれば CG 互換になる:
 
@@ -848,7 +849,7 @@ HYPRE AMS のデフォルト設定では内部 BoomerAMG が hybrid GS (relax_ty
 |------------|:---:|--------|
 | relax_type=2 (l1-Jacobi) + alpha/beta relax_type=6 | **対称** | CG / COCR |
 | relax_type=16 (Chebyshev) + alpha/beta relax_type=16 | **対称** | CG / COCR |
-| relax_type=3 (hybrid GS, デフォルト) | 非対称 | GMRES |
+| relax_type=3 (hybrid GS, デフォルト) | 非対称 | BiCGStab |
 
 対称設定にすれば CG の O(1) メモリで利用可能だが、
 反復数が増加する可能性がある。現時点ではこれらのパラメータは未公開
@@ -860,9 +861,9 @@ HYPRE AMS のデフォルト設定では内部 BoomerAMG が hybrid GS (relax_ty
 |------|------|------|
 | H1 低次 (p=1-2) | **ABMC ICCG** | セットアップ最速、メモリ最小 |
 | H1/HCurl 高次 (p≥3) | **BDDC** (NGSolve組込み) | h非依存反復、高次で真価 |
-| HCurl 渦電流 (大規模 p=1) | **HYPRE AMS+GMRES** | 反復数安定 (1.44M DOFsで75反復) |
+| HCurl 渦電流 (大規模 p=1) | **HYPRE AMS+BiCGStab** | 反復数安定 (1.44M DOFsで26反復) |
 | HCurl 渦電流 (中規模) | **BDDC+CG** (NGSolve組込み) | メモリ効率、対称前処理 |
-| メモリ制約厳しい | **ABMC ICCG** | CG≈5ベクトル vs GMRES≈mベクトル |
+| メモリ制約厳しい | **ABMC ICCG** | CG≈5ベクトル vs BiCGStab≈8ベクトル |
 
 ---
 

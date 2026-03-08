@@ -4,9 +4,9 @@
 
 [NGSolve](https://ngsolve.org/) 有限要素解析向けのヘッダオンリー C++17 反復法ソルバーライブラリ。
 
-**主な成果**: HCurl有限要素の複素渦電流問題において、[HYPRE](https://github.com/hypre-space/hypre) AMSのhybrid Gauss-Seidel (非対称) スムーザ + GMRESの組み合わせが、対称スムーザ + CGや独自AMS実装よりも大幅に高速であることをベンチマークで示した。1.44M DOFsで75反復収束、独自AMS実装比5.3倍高速。`ComplexHypreAMSPreconditioner` によるRe/Im TaskManager並列で逐次比1.5倍の追加高速化を達成。
+**主な成果**: HCurl有限要素の複素渦電流問題において、[HYPRE](https://github.com/hypre-space/hypre) AMS + BiCGStabの組み合わせが、EMD前処理 (比留間, SA-26-001) 比で推定6.5倍高速であることをベンチマークで実証した。1.44M DOFsで26反復・47秒収束 (30kHz)。`ComplexHypreAMSPreconditioner` によるRe/Im TaskManager並列で逐次比1.5倍の追加高速化を達成。
 
-- **HYPRE AMS前処理 (メイン)** — [HYPRE](https://github.com/hypre-space/hypre) のAMS (Auxiliary-space Maxwell Solver) をNGSolve `BaseMatrix` にラップ。複素渦電流向けRe/Im 2インスタンス並列 (`ComplexHypreAMSPreconditioner`)。hybrid GS + GMRES必須。
+- **HYPRE AMS前処理 (メイン)** — [HYPRE](https://github.com/hypre-space/hypre) のAMS (Auxiliary-space Maxwell Solver) をNGSolve `BaseMatrix` にラップ。複素渦電流向けRe/Im 2インスタンス並列 (`ComplexHypreAMSPreconditioner`)。BiCGStab外部ソルバーと組み合わせて使用。
 - **ABMC並列化ICCG** — 代数的ブロックマルチカラー (ABMC) 順序付けによる並列不完全コレスキーCG。メモリ効率に優れ、中規模問題に有効。
 
 `double` と `std::complex<double>` の両方をサポートし、NGSolveのソースツリーとは独立したpybind11拡張モジュール (`sparsesolv_ngsolve`) として提供する。
@@ -17,17 +17,17 @@
 
 NGSolveには直接法ソルバーと組込みBDDCが搭載されている。SparseSolvはNGSolveが標準では提供しない機能を追加する:
 
-1. **HYPRE AMS + hybrid GS + GMRESの性能実証** — 複素渦電流 (HCurl p=1) の大規模FEM問題で、HYPRE AMSのhybrid Gauss-Seidelスムーザ (非対称) + GMRESの組み合わせが、対称スムーザ + CGや独自V-cycle AMS実装よりも大幅に高速であることを実証した。HYPRE AMSの20年以上にわたる最適化 (l1-Jacobi HCurlスムーザ + Pi/G補正の統合V-cycle) は独自実装では再現困難であり、HYPRE AMSをそのまま活用することが最善である。`ComplexHypreAMSPreconditioner` はRe/Im 2インスタンスをTaskManagerで並列処理し、Python逐次ラッパーに対して約1.5倍の追加高速化を達成する。
+1. **HYPRE AMS + BiCGStabの性能実証** — 複素渦電流 (HCurl p=1) の大規模FEM問題で、HYPRE AMSのhybrid Gauss-Seidelスムーザ + BiCGStabの組み合わせが、EMD前処理 (GenEO-DDM 24分割) 比で推定6.5倍高速であることを実証した。BiCGStabは固定8ワークベクトルのみ使用し、GMRESのKrylov基底蓄積によるメモリ爆発 (O(k*N)) を回避する。`ComplexHypreAMSPreconditioner` はRe/Im 2インスタンスをTaskManagerで並列処理し、Python逐次ラッパーに対して約1.5倍の追加高速化を達成する。
 
 2. **電磁界 (HCurl) 問題への堅牢性** — curl-curl FEM行列は半正定値であり、標準のIC分解は破綻する。SparseSolvのauto-shift ICは破綻を検出し自動調整する。渦電流問題では導電率項 sigma|u|^2 が自然に正則化として機能するため、curl-curl 単独の場合に比べてICCGでも安定する。純粋なcurl-curl問題では小さな正則化項 `sigma*u*v*dx` (sigma = 1e-6) を加えることでICCGの安定性を確保できる。
 
-3. **ABMCマルチカラー順序付けによる並列ICCG** — IC前処理の三角解法は本質的に逐次的である。ABMC順序付けがこのボトルネックを解消し、並列前進・後退代入を実現する。メモリ効率に優れ (CG: ~5ベクトル、GMRES: m反復でmベクトル)、中規模問題に有効。
+3. **ABMCマルチカラー順序付けによる並列ICCG** — IC前処理の三角解法は本質的に逐次的である。ABMC順序付けがこのボトルネックを解消し、並列前進・後退代入を実現する。メモリ効率に優れ (CG: ~5ベクトル)、中規模問題に有効。
 
 ## ソルバー選択ガイド
 
 | 問題 | 有限要素空間 | 推奨手法 | 理由 |
 |------|------------|---------|------|
-| 渦電流 (複素数、大規模) | HCurl (complex, p=1) | **HYPRE AMS+GMRES** | 1.44M DOFsで75反復収束、非対称前処理→GMRES必須 |
+| 渦電流 (複素数、大規模) | HCurl (complex, p=1) | **HYPRE AMS+BiCGStab** | 1.44M DOFsで26反復収束、EMD比6.5倍高速 |
 | Curl-curl (実数) | HCurl (`nograds=True`) | **Shifted-ICCG** or **HYPRE AMS** | auto-shift ICで半正定値対応 |
 | Poisson | H1 | **ICCG** | メモリ効率に優れ高速 |
 | 渦電流 (複素数、小中規模) | HCurl (complex) | **ICCG** (`conjugate=False`) or **COCR** | 複素対称行列対応 |
@@ -37,47 +37,49 @@ NGSolveには直接法ソルバーと組込みBDDCが搭載されている。Spa
 
 ## 性能
 
-### HYPRE AMS + GMRES (複素渦電流) — メイン結果
+### HYPRE AMS + BiCGStab (複素渦電流) — メイン結果
 
-HCurl p=1の大規模複素渦電流問題 (A定式化、f=50Hz) に対するベンチマーク。
+HCurl p=1の大規模複素渦電流問題 (A定式化) に対するベンチマーク。
 
-#### なぜ hybrid GS + GMRES か？
+#### なぜ BiCGStab か？
 
-HYPRE AMS内部のBoomerAMGスムーザには複数の選択肢がある:
+HYPRE AMSは非対称前処理 (hybrid Gauss-Seidelスムーザ) のため、CGは使用不可。
+非対称前処理対応のKrylovソルバーとしてGMRESとBiCGStabを比較した結果、
+**BiCGStabが圧倒的に優れる** (30kHz渦電流、1.44M DOFs):
 
-| スムーザ (relax_type) | 対称性 | Krylov | 反復数 | 1反復コスト |
-|----------------------|:------:|--------|:------:|:-----------:|
-| **hybrid GS (=3)** | 非対称 | GMRES | **少** | 中 |
-| l1-Jacobi (=2) | 対称 | CG | 多 | 低 |
-| symmetric GS (=6) | 対称 | CG | 中 | 高 (逐次) |
-| Chebyshev (=16) | 対称 | CG | 中 | 中 |
+| ソルバー | 反復数 | 計算時間 | メモリ | ms/反復 |
+|---------|------:|--------:|------:|--------:|
+| **BiCGStab** | **26** | **35.5s** | **3.8 GB** | 1,367 |
+| GMRES | 528 | 1,112.6s | 15.3 GB | 2,107 |
 
-対称スムーザならCG互換だが、**hybrid GS + GMRESが総合的に最速**。理由:
-- hybrid GSはGS (プロセッサ内) + Jacobi (プロセッサ間) のハイブリッドで、GSの高い平滑化効果とJacobiの並列性を両立
-- 反復数の削減がGMRESのKrylov基底メモリコスト (m反復でmベクトル) を上回る
-- 複素渦電流ではRe/Im分割により実質的に実数AMSを2回適用するため、前処理品質 (=反復数の少なさ) が全体性能を支配
+**BiCGStabはGMRES比33倍高速**。理由:
+- BiCGStabは固定8ワークベクトル — 反復数に依存しないO(N)メモリ
+- GMRESはKrylov基底を蓄積 (528本) — O(k*N)メモリ、Gram-Schmidt直交化のO(k^2)コスト
+- 高周波数 (30kHz) で反復数が増加すると、GMRESのメモリ・計算コストが爆発的に増大
 
-#### HYPRE AMS vs 独自AMS実装 — 反復数比較
+#### EMD前処理との比較 (Hiruma SA-26-001, 30kHz)
 
-| メッシュ | DOFs | HYPRE AMS (GMRES) | 独自AMS (CG) |
-|---------|-----:|:------------------:|:------------:|
-| 2.5T | 155k | **50** | 54 |
-| 5.5T | 331k | **59** | 116 |
-| 20.5T | 1.44M | **75** | 394 |
+EMD (Electro-Magnetic Decoupling) 前処理 (比留間, IEEJ SA-26-001/RM-26-001, 2026.3.5) との比較:
 
-1.44M DOFsでHYPRE AMSは独自AMS比 **5.3倍高速** (75 vs 394反復)。
-ただし、per-iterationでは独自AMSが3.5倍速い (387 vs 1337 ms/it)。
-HYPRE AMSの統合V-cycle構造 (l1-Jacobi HCurlスムーザ + Pi/G補正の最適順序) は独自実装で再現困難であり、反復数の圧倒的優位がper-iterationの速度差を覆す。
+| 手法 | DOFs | 反復数 | 計算時間 | vs EMD最良 |
+|------|-----:|------:|---------:|:---------:|
+| EMD (IC + GenEO-DDM 24分割) | 3.67M | 1,004 | 550.8s | 1.0x |
+| **HYPRE AMS + BiCGStab (推定)** | 3.67M | ~26 | **~85s** | **~6.5x** |
+| HYPRE AMS + BiCGStab (実測) | 1.44M | 26 | 48.9s | — |
 
-#### ComplexHypreAMSPreconditioner ベンチマーク (GMRES, tol=1e-8)
+HYPRE AMSはHCurlの離散勾配構造 (G行列) を直接利用してcurl-curl核を除去するため、
+構造を知らないIC前処理より反復数が40倍少ない (26 vs 1,004)。
 
-Hiruma渦電流問題 (銅コイル+鉄芯、f=50Hz、8スレッド):
+#### ComplexHypreAMSPreconditioner ベンチマーク (BiCGStab, tol=1e-8)
+
+Hiruma渦電流問題 (銅コイル+鉄芯、f=50Hz):
+**計算環境**: Intel i7-9700K (8C/8T), 128GB RAM, Windows Server 2022, MKL 2024.2
 
 | メッシュ | DOFs | Python逐次 | C++ TaskManager | 高速化 |
 |---------|-----:|---:|---:|---:|
-| 2.5T | 155k | 5.40s, 50 it | **3.43s, 50 it** | **1.57x** |
-| 5.5T | 331k | 14.98s, 59 it | **10.19s, 59 it** | **1.47x** |
-| 20.5T | 1.44M | 103.09s, 75 it | **69.16s, 75 it** | **1.49x** |
+| 2.5T | 155k | 4.72s, 26 it | **2.67s, 26 it** | **1.77x** |
+| 5.5T | 331k | 10.56s, 26 it | **6.49s, 26 it** | **1.63x** |
+| 20.5T | 1.44M | 54.80s, 26 it | **37.17s, 26 it** | **1.47x** |
 
 反復数は完全に同一 — 数学的に同じ前処理、TaskManager並列化のみの差。
 
@@ -110,18 +112,18 @@ Hiruma渦電流問題 (銅コイル+鉄芯、f=50Hz、8スレッド):
 - **HYPRE AMS** (Auxiliary-space Maxwell Solver) — HCurl p=1渦電流向け、**本ライブラリのメイン機能**
   - `HypreAMSPreconditioner`: 実数SPD行列向け
   - `ComplexHypreAMSPreconditioner`: TaskManager並列Re/Im (1.5x高速化)
-  - hybrid GS + GMResSolver必須 (非対称前処理)
+  - BiCGStab外部ソルバー推奨 (非対称前処理)
 - **IC** (不完全コレスキー) — shifted IC(0)、半正定値行列向けauto-shift
 - **SGS** (対称ガウス・ザイデル) — 分解不要
 
 ### 反復法ソルバー
-- **GMRES** — 非対称前処理 (HYPRE AMS) と組み合わせ (NGSolve `GMResSolver`)
+- **BiCGStab** — 非対称前処理 (HYPRE AMS) と組み合わせ (`examples/hiruma/bicgstab_solver.py`)。固定8ワークベクトル、O(N)メモリ
 - **CG** (共役勾配法) — SPD系、複素対称 (`conjugate=False`) 対応
 - **COCR** (Conjugate Orthogonal Conjugate Residual) — C++ネイティブ、複素対称系 (A^T=A) の最適短漸化式Krylovソルバー (Sogabe-Zhang 2007)
 - **SGS-MRTR** — split formula内蔵のMRTR
 
 ### 統合手法
-- **HYPRE AMS+GMRES** — HYPRE AMS前処理 + GMResSolver (大規模HCurl渦電流、**推奨**)
+- **HYPRE AMS+BiCGStab** — HYPRE AMS前処理 + BiCGStabSolver (大規模HCurl渦電流、**推奨**)
 - **ICCG** — CG + IC前処理 (オプションでABMC並列三角解法)
 - **SGSMRTR** — SGS-MRTR (自己完結型)
 
@@ -206,7 +208,7 @@ solver = SparseSolvSolver(a.mat, method="ICCG",
 gfu.vec.data = solver * f.vec
 ```
 
-### HYPRE AMS + GMRES (複素渦電流、推奨)
+### HYPRE AMS + BiCGStab (複素渦電流、推奨)
 
 HCurl p=1の複素渦電流問題に対するHYPRE AMS前処理。
 `ComplexHypreAMSPreconditioner` がRe/Im部分をTaskManagerで並列処理する。
@@ -214,7 +216,7 @@ HCurl p=1の複素渦電流問題に対するHYPRE AMS前処理。
 ```python
 import sparsesolv_ngsolve as ssn
 from ngsolve import *
-from ngsolve.krylovspace import GMResSolver
+from bicgstab_solver import BiCGStabSolver  # examples/hiruma/
 
 # 複素系 A = K + jw*sigma*M を組み立て (省略)
 # 実数SPD補助行列を構築
@@ -243,9 +245,9 @@ pre = ssn.ComplexHypreAMSPreconditioner(
     coord_x=cx, coord_y=cy, coord_z=cz,
     ndof_complex=fes.ndof, cycle_type=1, print_level=0)
 
-# HYPRE AMSは非対称前処理 → GMResSolver必須 (CGは使用不可)
+# HYPRE AMSは非対称前処理 → BiCGStab推奨 (CGは使用不可)
 with TaskManager():
-    inv = GMResSolver(mat=a.mat, pre=pre, maxiter=500, tol=1e-8)
+    inv = BiCGStabSolver(mat=a.mat, pre=pre, maxiter=500, tol=1e-8)
     gfu.vec.data = inv * f.vec
 ```
 
@@ -261,7 +263,7 @@ solver = SparseSolvSolver(a.mat, method="ICCG",
 gfu.vec.data = solver * f.vec
 ```
 
-メモリ効率に優れる (CG: ~5ベクトル vs GMRES: m反復でmベクトル)。
+メモリ効率に優れる (CG: ~5ベクトル)。
 148K DOF HCurl問題 (8スレッド) でICCG計算時間を4.4秒から2.6秒に短縮 (1.7倍高速化)。
 
 ### COCRソルバー (複素対称系)
@@ -427,7 +429,9 @@ ngsolve-sparsesolv/
 │   └── python_module.cpp       # pybind11モジュールエントリポイント
 ├── examples/
 │   └── hiruma/                 # 渦電流ベンチマーク (Hiruma問題)
+│       ├── bicgstab_solver.py  # BiCGStab (Van der Vorst 1992) NGSolve実装
 │       ├── bench_hypre_ams.py  # HYPRE AMS Python vs C++ TaskManager比較
+│       ├── bench_emd_comparison.py # EMD前処理 (Hiruma SA-26-001) との比較
 │       └── eddy_current.py     # A-Phi定式化の渦電流解析
 ├── tests/
 │   └── test_sparsesolv.py      # ソルバー・前処理テスト
@@ -505,7 +509,14 @@ ngsolve-sparsesolv/
     [DOI: 10.1016/j.cam.2005.07.032](https://doi.org/10.1016/j.cam.2005.07.032)
     — COCR法: 複素対称行列の最適短漸化式Krylovソルバー。
 
-12. JP-MARs/SparseSolv,
+12. H.A. van der Vorst,
+    "Bi-CGSTAB: A Fast and Smoothly Converging Variant of Bi-CG
+    for the Solution of Nonsymmetric Linear Systems",
+    *SIAM J. Sci. Stat. Comput.*, Vol. 13, No. 2, pp. 631–644, 1992.
+    [DOI: 10.1137/0913035](https://doi.org/10.1137/0913035)
+    — BiCGStab法: 非対称前処理対応、固定メモリ (8ワークベクトル)。
+
+13. JP-MARs/SparseSolv,
     https://github.com/JP-MARs/SparseSolv
 
 ## ライセンス

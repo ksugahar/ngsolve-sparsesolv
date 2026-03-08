@@ -22,7 +22,7 @@ SparseSolvは有限要素法 (FEM) の大規模疎行列連立方程式を解く
 
 ### 主な機能
 
-- **HYPRE AMS前処理**: HCurl渦電流問題向け、hybrid GS + GMRES (メイン機能)
+- **HYPRE AMS前処理**: HCurl渦電流問題向け、hybrid GS + BiCGStab推奨 (メイン機能)
 - **IC分解 (不完全コレスキー)**: auto-shift対応。curl-curl半正定値行列にも対応
 - **SGS-MRTR**: DAD変換による対角スケーリング内蔵の反復法
 - **CG法**: 前処理付き共役勾配法。複素対称系 (非共役内積) 対応
@@ -32,7 +32,7 @@ SparseSolvは有限要素法 (FEM) の大規模疎行列連立方程式を解く
 
 | 問題 | 有限要素空間 | 推奨ソルバー |
 |------|------------|------------|
-| 渦電流 (複素数、大規模) | HCurl (complex, p=1) | HYPRE AMS+GMRES |
+| 渦電流 (複素数、大規模) | HCurl (complex, p=1) | HYPRE AMS+BiCGStab |
 | Curl-curl (実数) | HCurl (nograds=True) | Shifted-ICCG or HYPRE AMS |
 | Poisson方程式 | H1 | ICCG |
 | 渦電流 (複素数、小中規模) | HCurl (complex) | ICCG or COCR |

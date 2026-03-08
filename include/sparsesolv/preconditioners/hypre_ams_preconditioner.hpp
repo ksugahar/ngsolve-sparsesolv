@@ -299,7 +299,7 @@ private:
 ///   auto pre = make_shared<ComplexHypreAMSPreconditioner>(
 ///       a_real_mat, grad_mat, freedofs, coord_x, coord_y, coord_z,
 ///       ndof_complex, cycle_type, print_level);
-///   // Use with NGSolve's GMResSolver on complex system
+///   // Use with BiCGStabSolver on complex system
 class ComplexHypreAMSPreconditioner : public BaseMatrix {
 public:
     /// @param a_real_mat   Real auxiliary matrix (SparseMatrix<double>)

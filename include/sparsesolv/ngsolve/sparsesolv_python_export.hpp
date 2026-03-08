@@ -530,7 +530,7 @@ For complex eddy current problems (A = K + jw*sigma*M). Creates TWO
 independent HYPRE AMS solver instances and applies them to the real
 and imaginary parts in parallel via NGSolve TaskManager.
 
-Use with GMResSolver on the complex system matrix.
+Use with BiCGStabSolver on the complex system matrix.
 
 Parameters:
 
@@ -599,7 +599,7 @@ Minimizes ||A r~||_2 for smoother convergence than COCG/CG.
 
 When to use COCRSolver vs SparseSolvSolver(method="COCR"):
   - COCRSolver(mat, pre): accepts any external BaseMatrix preconditioner
-    (e.g., IC, HYPRE AMS). Same interface as NGSolve CGSolver/GMResSolver.
+    (e.g., IC, HYPRE AMS). Same interface as NGSolve CGSolver/BiCGStabSolver.
   - SparseSolvSolver(method="COCR"): uses internal IC preconditioner with
     auto-shift, ABMC ordering, divergence detection. Unified solver interface.
 

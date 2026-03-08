@@ -57,3 +57,6 @@ results_*.json
 
 # Original mesh files (gmsh v1 format, kept locally)
 **/original_msh1/
+
+# Internal review documents
+review_report.md

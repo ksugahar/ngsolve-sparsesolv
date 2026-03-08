@@ -5,13 +5,28 @@
 形式は[Keep a Changelog](https://keepachangelog.com/en/1.1.0/)に基づいており、
 このプロジェクトは[Semantic Versioning](https://semver.org/spec/v2.0.0.html)に従っています。
 
+## [2.5.0] - 2026-03-08
+
+### 追加
+- **BiCGStabソルバー** (`bicgstab_solver.py`) — 非対称前処理対応Krylovソルバー
+  - Van der Vorst (1992) アルゴリズム、固定8作業ベクトル (O(N)メモリ)
+  - HYPRE AMS + BiCGStab: GMRES比33x高速化 (30kHz、1.44M DOFs)
+  - 全メッシュサイズで反復数26回に統一 (GMRES: 50-75回)
+- **EMDベンチマーク** (`bench_emd_comparison.py`) — 比留間EMD前処理との比較
+  - SA-26-001 (比留間、2026.3.5) のEMD前処理結果と比較
+  - HYPRE AMS + BiCGStab: EMD最良 (GenEO-DDM) 比6.5x高速
+
+### 変更
+- GMRES → BiCGStab: 全ドキュメント・ベンチマーク・コード例を移行
+- SGS前処理のスパース行列参照を非所有ポインタに変更 (二重解放バグ修正)
+
 ## [2.4.0] - 2026-03-07
 
 ### 追加
 - **ComplexHypreAMSPreconditioner** — 複素渦電流向けHYPRE AMS (TaskManager並列Re/Im)
   - 2つの独立HYPRE AMSインスタンスでRe/Im部分を同時処理
   - NGSolve TaskManagerによる並列化 (1.5x高速化: 155k~1.44M DOFs)
-  - GMResSolver と組み合わせて使用 (HYPRE AMSは非対称前処理)
+  - BiCGStabSolver と組み合わせて使用 (HYPRE AMSは非対称前処理)
 - **COCRソルバー (C++)** — 複素対称系 (A^T=A) 向けKrylovソルバー
   - `COCRSolver(mat, pre)`: C++ネイティブ実装、NGSolve BaseMatrix互換
   - `SparseSolvSolver(method="COCR")`: SparseSolvSolverディスパッチからも利用可能

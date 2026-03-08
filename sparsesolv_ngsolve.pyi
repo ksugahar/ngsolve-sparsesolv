@@ -332,7 +332,7 @@ def ComplexHypreAMSPreconditioner(
     Only available when built with ``SPARSESOLV_USE_HYPRE=ON``.
 
     For complex eddy-current systems ``A = K + jw*sigma*M``.
-    Use with ``GMResSolver`` (HYPRE AMS is non-symmetric).
+    Use with ``BiCGStabSolver`` (HYPRE AMS is non-symmetric).
 
     Args:
         a_real_mat: Real SPD auxiliary matrix (K + eps*M + |omega|*sigma*M).

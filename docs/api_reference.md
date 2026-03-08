@@ -197,7 +197,7 @@ if result.converged:
 2つの独立HYPRE AMSインスタンスを作成し、Re/Im部分をNGSolve TaskManagerで
 並列に処理する。Python Re/Im wrapperに対して約1.5x高速化。
 
-HYPRE AMSは非対称前処理 (relax_type=3, hybrid GS) → **GMResSolver必須**。
+HYPRE AMSは非対称前処理 (relax_type=3, hybrid GS) → **BiCGStabSolver推奨**。
 
 ### コンストラクタ
 
@@ -224,7 +224,7 @@ pre = ComplexHypreAMSPreconditioner(
 
 ```python
 import sparsesolv_ngsolve as ssn
-from ngsolve.krylovspace import GMResSolver
+from bicgstab_solver import BiCGStabSolver
 
 pre = ssn.ComplexHypreAMSPreconditioner(
     a_real_mat=a_real.mat, grad_mat=G_mat,
@@ -233,19 +233,19 @@ pre = ssn.ComplexHypreAMSPreconditioner(
     ndof_complex=fes.ndof, cycle_type=1, print_level=0)
 
 with TaskManager():
-    inv = GMResSolver(mat=a.mat, pre=pre, maxiter=500, tol=1e-8)
+    inv = BiCGStabSolver(mat=a.mat, pre=pre, maxiter=500, tol=1e-8)
     gfu.vec.data = inv * f.vec
 ```
 
-### ベンチマーク結果 (GMRES, tol=1e-8)
+### ベンチマーク結果 (BiCGStab, tol=1e-8)
 
 | メッシュ | DOFs | Python (逐次) | C++ TaskManager | 高速化 |
 |---------|-----:|---:|---:|---:|
-| 2.5T | 155k | 5.40s, 50 it | **3.43s, 50 it** | **1.57x** |
-| 5.5T | 331k | 14.98s, 59 it | **10.19s, 59 it** | **1.47x** |
-| 20.5T | 1.44M | 103.09s, 75 it | **69.16s, 75 it** | **1.49x** |
+| 2.5T | 155k | 4.72s, 26 it | **2.67s, 26 it** | **1.77x** |
+| 5.5T | 331k | 10.56s, 26 it | **6.49s, 26 it** | **1.63x** |
+| 20.5T | 1.44M | 54.80s, 26 it | **37.17s, 26 it** | **1.47x** |
 
-反復数は同一 (数学的に同じ、並列化のみ異なる)。
+反復数は全メッシュで26回 (メッシュサイズ非依存)。GMRES比33x高速化。
 
 ---
 

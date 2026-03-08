@@ -1,8 +1,8 @@
-"""Benchmark: HYPRE AMS + GMRES for complex eddy current problems.
+"""Benchmark: HYPRE AMS + BiCGStab for complex eddy current problems.
 
 Compares:
-  1. HYPRE AMS (real) + Python Re/Im wrapper + GMRES (sequential)
-  2. ComplexHypreAMSPreconditioner + GMRES (TaskManager parallel Re/Im)
+  1. HYPRE AMS (real) + Python Re/Im wrapper + BiCGStab (sequential)
+  2. ComplexHypreAMSPreconditioner + BiCGStab (TaskManager parallel Re/Im)
 
 Usage:
     python bench_hypre_ams.py [mesh_name ...]
@@ -17,8 +17,8 @@ from datetime import datetime
 import numpy as np
 from netgen.read_gmsh import ReadGmsh
 from ngsolve import *
-from ngsolve.krylovspace import GMResSolver
 import sparsesolv_ngsolve as ssn
+from bicgstab_solver import BiCGStabSolver
 
 mu0 = 4e-7 * np.pi
 omega = 2 * np.pi * 50.0
@@ -83,8 +83,8 @@ def run_solver(p, label, pre, maxiter=500, tol=1e-8):
     gfu = GridFunction(p["fes"])
     with TaskManager():
         t0 = time.perf_counter()
-        inv = GMResSolver(mat=p["a"].mat, pre=pre, maxiter=maxiter,
-                          printrates=False, tol=tol)
+        inv = BiCGStabSolver(mat=p["a"].mat, pre=pre, maxiter=maxiter,
+                             printrates=False, tol=tol)
         gfu.vec.data = inv * p["f"].vec
         t_solve = time.perf_counter() - t0
 
@@ -149,7 +149,7 @@ def run_benchmark(mesh_name):
     t_setup1 = time.perf_counter() - t0
 
     pre_py = PythonComplexWrapper(pre_real, p["fes"].ndof)
-    r = run_solver(p, "Python Re/Im wrapper (sequential) + GMRES", pre_py)
+    r = run_solver(p, "Python Re/Im wrapper (sequential) + BiCGStab", pre_py)
     r["t_setup"] = round(t_setup1, 4)
     results.append(r)
 
@@ -167,7 +167,7 @@ def run_benchmark(mesh_name):
         print_level=0)
     t_setup2 = time.perf_counter() - t0
 
-    r = run_solver(p, "C++ ComplexHypreAMS (TaskManager) + GMRES", pre_cpp)
+    r = run_solver(p, "C++ ComplexHypreAMS (TaskManager) + BiCGStab", pre_cpp)
     r["t_setup"] = round(t_setup2, 4)
     results.append(r)
 

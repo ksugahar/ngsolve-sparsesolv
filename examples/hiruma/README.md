@@ -44,7 +44,9 @@ mesh = Mesh(m)
 | Script | Description |
 |--------|-------------|
 | `eddy_current.py` | Original BDDC solver (MKL PARDISO coarse) |
-| `bench_hypre_ams.py` | Benchmark: HYPRE AMS Python wrapper vs C++ TaskManager |
+| `bicgstab_solver.py` | BiCGStabソルバー (NGSolve LinearSolver互換) |
+| `bench_hypre_ams.py` | Benchmark: HYPRE AMS Python vs C++ TaskManager (BiCGStab) |
+| `bench_emd_comparison.py` | Benchmark: HYPRE AMS + BiCGStab vs EMD (SA-26-001) |
 
 ### Archived (in `_archive/`)
 
@@ -64,13 +66,13 @@ For complex eddy-current systems `A = K + j*omega*sigma*M`:
 `ComplexHypreAMSPreconditioner` creates TWO independent HYPRE AMS instances
 and runs them concurrently via NGSolve TaskManager for ~1.5x speedup.
 
-HYPRE AMS is non-symmetric (relax_type=3, hybrid GS) -> **GMResSolver required**.
+HYPRE AMS is non-symmetric (relax_type=3, hybrid GS) -> **BiCGStabSolver recommended**.
 
 ### Usage
 
 ```python
 import sparsesolv_ngsolve as ssn
-from ngsolve.krylovspace import GMResSolver
+from bicgstab_solver import BiCGStabSolver
 
 pre = ssn.ComplexHypreAMSPreconditioner(
     a_real_mat=a_real.mat, grad_mat=G_mat,
@@ -79,18 +81,26 @@ pre = ssn.ComplexHypreAMSPreconditioner(
     ndof_complex=fes.ndof, cycle_type=1, print_level=0)
 
 with TaskManager():
-    inv = GMResSolver(mat=a.mat, pre=pre, maxiter=500, tol=1e-8)
+    inv = BiCGStabSolver(mat=a.mat, pre=pre, maxiter=500, tol=1e-8)
     gfu.vec.data = inv * f.vec
 ```
 
-### Benchmark Results (GMRES, tol=1e-8)
+### Benchmark Results (BiCGStab, tol=1e-8)
 
 | Mesh | DOFs | Python (sequential) | C++ TaskManager | Speedup |
 |------|-----:|---:|---:|---:|
-| 2.5T | 155k | 5.40s, 50 it | **3.43s, 50 it** | **1.57x** |
-| 5.5T | 331k | 14.98s, 59 it | **10.19s, 59 it** | **1.47x** |
-| 20.5T | 1.44M | 103.09s, 75 it | **69.16s, 75 it** | **1.49x** |
+| 2.5T | 155k | 4.72s, 26 it | **2.67s, 26 it** | **1.77x** |
+| 5.5T | 331k | 10.56s, 26 it | **6.49s, 26 it** | **1.63x** |
+| 20.5T | 1.44M | 54.80s, 26 it | **37.17s, 26 it** | **1.47x** |
 
-Iteration counts are identical - same math, only parallelism differs.
+Iteration count is 26 for all meshes (mesh-size independent). 33x faster than GMRES.
 
-Run: `python bench_hypre_ams.py`
+### EMD Comparison (30 kHz, 1.44M DOFs)
+
+| Method | Iterations | Time |
+|--------|----------:|-----:|
+| EMD: IC only (SA-26-001) | 15,838 | 5964.8s |
+| EMD: IC + GenEO-DDM 24 (SA-26-001) | 1,004 | 550.8s |
+| **HYPRE AMS + BiCGStab** | **26** | **35.5s** |
+
+Run: `python bench_hypre_ams.py` / `python bench_emd_comparison.py mesh1_20.5T`
