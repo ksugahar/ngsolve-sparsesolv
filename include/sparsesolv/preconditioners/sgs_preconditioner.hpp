@@ -34,8 +34,10 @@ namespace sparsesolv {
  * - Works well with the SGS-MRTR solver
  * - Is symmetric, so can be used with CG
  *
- * @note This class owns a copy of the matrix data, so the original matrix
- *       can be safely destroyed after setup().
+ * @note This class stores non-owning pointers to the matrix CSR data.
+ *       The caller MUST ensure the underlying data remains valid for the
+ *       lifetime of this preconditioner (e.g., by holding a shared_ptr
+ *       to the source matrix).
  * @note This class is NOT thread-safe for concurrent apply() calls.
  *       Use separate preconditioner instances for each thread.
  *
@@ -46,7 +48,7 @@ class SGSPreconditioner : public Preconditioner<Scalar> {
 public:
     SGSPreconditioner() = default;
 
-    // Disable copy (owns resources)
+    // Disable copy (level schedules are non-trivial)
     SGSPreconditioner(const SGSPreconditioner&) = delete;
     SGSPreconditioner& operator=(const SGSPreconditioner&) = delete;
 
@@ -57,33 +59,19 @@ public:
     /**
      * @brief Setup the SGS preconditioner from matrix A
      *
-     * Copies the matrix data internally for safe storage.
+     * Stores non-owning pointers to A's CSR data (no deep copy).
+     * The caller must ensure the data outlives this preconditioner.
      *
-     * @param A Sparse matrix (CSR format)
+     * @param A Sparse matrix view (CSR format, data must remain valid)
      */
     void setup(const SparseMatrixView<Scalar>& A) override {
         const index_t n = A.rows();
         size_ = n;
 
-        // Copy CSR data (owns the data to avoid dangling pointers)
-        const index_t nnz = A.nnz();
-        row_ptr_.resize(n + 1);
-        col_idx_.resize(nnz);
-        values_.resize(nnz);
-
-        // Copy row pointers
-        const index_t* src_rp = A.row_ptr();
-        parallel_for(n + 1, [&](index_t i) {
-            row_ptr_[i] = src_rp[i];
-        });
-
-        // Copy column indices and values
-        const index_t* src_ci = A.col_idx();
-        const Scalar* src_v = A.values();
-        parallel_for(nnz, [&](index_t i) {
-            col_idx_[i] = src_ci[i];
-            values_[i] = src_v[i];
-        });
+        // Store non-owning pointers (no deep copy — SGS does not modify values)
+        row_ptr_ = A.row_ptr();
+        col_idx_ = A.col_idx();
+        values_ = A.values();
 
         // Extract and invert diagonal
         inv_diag_.resize(n);
@@ -97,8 +85,8 @@ public:
         });
 
         // Build level schedules for parallel triangular solves
-        fwd_schedule_.build_from_lower(row_ptr_.data(), col_idx_.data(), n);
-        bwd_schedule_.build_from_upper(row_ptr_.data(), col_idx_.data(), n);
+        fwd_schedule_.build_from_lower(row_ptr_, col_idx_, n);
+        bwd_schedule_.build_from_upper(row_ptr_, col_idx_, n);
 
         // Pre-allocate work vectors for apply()
         temp_.resize(size_);
@@ -144,10 +132,10 @@ public:
 private:
     index_t size_ = 0;
 
-    // Owned CSR data (copied from input matrix)
-    std::vector<index_t> row_ptr_;
-    std::vector<index_t> col_idx_;
-    std::vector<Scalar> values_;
+    // Non-owning pointers to CSR data (caller ensures lifetime)
+    const index_t* row_ptr_ = nullptr;
+    const index_t* col_idx_ = nullptr;
+    const Scalar* values_ = nullptr;
 
     std::vector<Scalar> inv_diag_;
 
@@ -165,9 +153,9 @@ private:
      * Uses level scheduling for parallelism.
      */
     void forward_sweep(const Scalar* x, Scalar* y) const {
-        const index_t* rp = row_ptr_.data();
-        const index_t* ci = col_idx_.data();
-        const Scalar* v = values_.data();
+        const index_t* rp = row_ptr_;
+        const index_t* ci = col_idx_;
+        const Scalar* v = values_;
 
         for (const auto& level : fwd_schedule_.levels) {
             const index_t level_size = static_cast<index_t>(level.size());
@@ -191,9 +179,9 @@ private:
      * Uses level scheduling for parallelism.
      */
     void backward_sweep(const Scalar* x, Scalar* y) const {
-        const index_t* rp = row_ptr_.data();
-        const index_t* ci = col_idx_.data();
-        const Scalar* v = values_.data();
+        const index_t* rp = row_ptr_;
+        const index_t* ci = col_idx_;
+        const Scalar* v = values_;
 
         for (const auto& level : bwd_schedule_.levels) {
             const index_t level_size = static_cast<index_t>(level.size());
