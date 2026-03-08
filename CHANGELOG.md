@@ -5,12 +5,34 @@
 形式は[Keep a Changelog](https://keepachangelog.com/en/1.1.0/)に基づいており、
 このプロジェクトは[Semantic Versioning](https://semver.org/spec/v2.0.0.html)に従っています。
 
+## [2.4.0] - 2026-03-07
+
+### 追加
+- **ComplexHypreAMSPreconditioner** — 複素渦電流向けHYPRE AMS (TaskManager並列Re/Im)
+  - 2つの独立HYPRE AMSインスタンスでRe/Im部分を同時処理
+  - NGSolve TaskManagerによる並列化 (1.5x高速化: 155k~1.44M DOFs)
+  - GMResSolver と組み合わせて使用 (HYPRE AMSは非対称前処理)
+- **COCRソルバー (C++)** — 複素対称系 (A^T=A) 向けKrylovソルバー
+  - `COCRSolver(mat, pre)`: C++ネイティブ実装、NGSolve BaseMatrix互換
+  - `SparseSolvSolver(method="COCR")`: SparseSolvSolverディスパッチからも利用可能
+  - ヘッダオンリー: `include/sparsesolv/solvers/cocr_solver.hpp`
+  - 非共役内積 (x^T y) を使用、渦電流の複素対称FEM行列に最適
+  - COCG (Conjugate Orthogonal CG) は `CGSolver(conjugate=False)` で利用可能
+- `.pyi` 型スタブにComplexHypreAMS、HypreBoomerAMG、has_hypre()を追加
+
+### 削除
+- Custom AMS前処理 (`TaskManagerAMSPreconditioner`, `ComplexTaskManagerAMSPreconditioner`,
+  `FusedComplexTaskManagerAMSPreconditioner`) — HYPRE AMSが反復数で5.2x優位のため
+- `ComputePiSubspaceMatrices`, `ComputeGalerkinH1Matrix`, `ComputeCombinedPiSubspaceMatrix`
+
+### 改善
+- Hiruma例題ディレクトリの整理: デバッグ・中間ファイルを `_archive/` に移動
+
 ## [2.3.0] - 2026-02-28
 
 ### 追加
 - Hiruma渦電流問題のメッシュ例題 (6メッシュ、Gmsh v2形式、Git LFS)
 - `examples/hiruma/eddy_current.py` — A-Phi定式化の渦電流解析
-- `examples/hiruma/bench_parallel.py` — BDDC vs ABMC+ICCG 並列スケーリングベンチマーク
 
 ### 改善
 - CG反復のカーネル融合 — メモリトラフィック約20%削減
@@ -32,29 +54,21 @@
 ## [2.2.0] - 2026-02-25
 
 ### 追加
-- BDDC前処理: MKL PARDISO直接統合による粗解法
 - ABMC並列IC分解 (色ごとのparallel_for)
 - レベルスケジューリング三角解法の持続的並列領域 (SpinBarrier)
 - ABMCプロパティのPython API公開 (`use_abmc`, `abmc_block_size`, etc.)
 
 ### 変更
-- BDDC粗解法をNGSolve SparseCholeskyからMKL PARDISOに変更
 - ヘッダオンリーインストールからngsolve/ヘッダを除外
 
 ## [2.1.0] - 2026-02-21
 
 ### 追加
-- BDDC (Balancing Domain Decomposition by Constraints) 前処理行列
-  - BilinearForm からの要素ごとの構成
-  - NGSolve CouplingType による Wirebasket/interface DOF 分類
-  - 粗解法: SparseCholesky (デフォルト)、PARDISO
-  - メッシュ非依存収束 (すべてのテスト問題で CG 2 反復)
 - `docs/` の日本語ドキュメント (アーキテクチャ、アルゴリズム、API リファレンス、チュートリアル)
 - すべてのソースファイルに MPL 2.0 ライセンスヘッダ
 - CONTRIBUTING.md
 
 ### 変更
-- ブロック消去 BDDC アプローチを削除 (要素ごとのアプローチに置き換え)
 - 未使用の前処理行列を削除 (Identity、Jacobi、ILU)
 - MRTRSolver を削除 (SGS-MRTR は自己完結)
 - IC 前処理行列の重複する `reorder_matrix()` コードを統合
@@ -63,7 +77,6 @@
 
 ### 修正
 - DenseMatrix::invert() 置換行列の構成 (P^T → P)
-  - 自明でないピボッティングの HCurl 問題で BDDC 失敗を引き起こす
 - 複素数内積: 複素対称 FEM 行列の非共役内積
   - 渦電流の発散を修正 (5000 反復 → 58 反復)
 - SGS-MRTR 複素数比較: 閾値チェックに `std::real(denom)` を使用

@@ -56,7 +56,7 @@ print(';'.join(paths))
     )
     message(STATUS "Found NGSolve: ${NGSOLVE_INCLUDE_DIRS}")
 
-    # MKL PARDISO (required for BDDC coarse solver)
+    # MKL (BLAS/LAPACK for dense matrix operations)
     # Use LP64 interface (MKL_INT = int, 32-bit) to match sparsesolv::index_t
     set(MKL_INTERFACE_FULL intel_lp64)
     # Auto-detect MKL cmake config: oneAPI toolkit, pip mkl-devel, or pip mkl
@@ -91,13 +91,52 @@ if paths: print(paths[0])
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
     target_compile_features(sparsesolv_ngsolve PRIVATE cxx_std_17)
+    if(MSVC)
+        target_compile_options(sparsesolv_ngsolve PRIVATE /arch:AVX2)
+    else()
+        target_compile_options(sparsesolv_ngsolve PRIVATE -mavx2 -mfma)
+    endif()
     target_link_libraries(sparsesolv_ngsolve PRIVATE MKL::MKL)
 
     # Use NGSolve TaskManager for parallel_for/parallel_reduce_sum
     target_compile_definitions(sparsesolv_ngsolve PRIVATE SPARSESOLV_USE_NGSOLVE_TASKMANAGER)
 
-    # MKL BLAS/LAPACK for dense matrix operations in BDDC
+    # MKL BLAS/LAPACK for dense matrix operations
     target_compile_definitions(sparsesolv_ngsolve PRIVATE SPARSESOLV_USE_MKL)
+
+    # HYPRE AMS (optional)
+    option(SPARSESOLV_USE_HYPRE "Enable HYPRE AMS preconditioner" OFF)
+    if(SPARSESOLV_USE_HYPRE)
+        set(HYPRE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/hypre" CACHE PATH "HYPRE source directory")
+        set(HYPRE_BUILD_DIR "${HYPRE_DIR}/build" CACHE PATH "HYPRE build directory")
+
+        # HYPRE headers (source + generated config)
+        target_include_directories(sparsesolv_ngsolve PRIVATE
+            ${HYPRE_DIR}/src
+            ${HYPRE_DIR}/src/utilities
+            ${HYPRE_DIR}/src/IJ_mv
+            ${HYPRE_DIR}/src/parcsr_mv
+            ${HYPRE_DIR}/src/parcsr_ls
+            ${HYPRE_DIR}/src/seq_mv
+            ${HYPRE_DIR}/src/multivector
+            ${HYPRE_DIR}/src/krylov
+            ${HYPRE_BUILD_DIR}
+        )
+
+        # HYPRE static library
+        find_library(HYPRE_LIBRARY HYPRE
+            PATHS ${HYPRE_BUILD_DIR}/Release ${HYPRE_BUILD_DIR}
+            NO_DEFAULT_PATH)
+        if(NOT HYPRE_LIBRARY)
+            message(FATAL_ERROR "HYPRE library not found. Build HYPRE first:\n"
+                "  cd external/hypre && mkdir build && cd build\n"
+                "  cmake ../src -DHYPRE_WITH_MPI=OFF -DCMAKE_BUILD_TYPE=Release\n"
+                "  cmake --build . --config Release")
+        endif()
+        message(STATUS "Found HYPRE: ${HYPRE_LIBRARY}")
+        target_link_libraries(sparsesolv_ngsolve PRIVATE ${HYPRE_LIBRARY})
+        target_compile_definitions(sparsesolv_ngsolve PRIVATE SPARSESOLV_USE_HYPRE)
+    endif()
 
     # Install the Python module
     if(SKBUILD)

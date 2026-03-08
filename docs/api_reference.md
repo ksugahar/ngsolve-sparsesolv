@@ -5,69 +5,24 @@
 ```python
 import ngsolve  # 先にインポート必須 (共有ライブラリのロード)
 from sparsesolv_ngsolve import (
-    BDDCPreconditioner,    # BDDC領域分割前処理
+    # 前処理 (IC/SGS)
     ICPreconditioner,      # 不完全コレスキー前処理
     SGSPreconditioner,     # 対称ガウス・ザイデル前処理
-    SparseSolvSolver,      # 統合反復法ソルバー
+
+    # HYPRE AMS前処理 (HCurl渦電流向け)
+    HypreAMSPreconditioner,              # 実数HYPRE AMS
+    ComplexHypreAMSPreconditioner,       # 複素Re/Im TaskManager並列
+    HypreBoomerAMGPreconditioner,        # H1スカラー楕円系向けAMG
+    has_hypre,                           # HYPRE利用可否チェック
+
+    # 反復法ソルバー
+    SparseSolvSolver,      # 統合反復法ソルバー (ICCG/SGSMRTR/CG/COCR)
     SparseSolvResult,      # ソルブ結果
+    COCRSolver,            # COCR (複素対称系、C++ネイティブ)
 )
 ```
 
 Factory関数は行列の型 (実数/複素数) を `mat.IsComplex()` で自動判定する。
-
----
-
-## BDDCPreconditioner
-
-BDDC (Balancing Domain Decomposition by Constraints) 前処理。
-NGSolveの `CGSolver` と組み合わせて使用する。
-
-### コンストラクタ
-
-```python
-pre = BDDCPreconditioner(a, fes)
-```
-
-| 引数 | 型 | 説明 |
-|------|------|------|
-| `a` | `BilinearForm` | **組立済み**の双線形形式 (`a.Assemble()` 済み) |
-| `fes` | `FESpace` | 有限要素空間 |
-
-粗空間ソルバーにはMKL PARDISOを使用（内部で自動選択）。
-
-**内部処理**:
-1. `fes.CouplingType` からDOF分類 (wirebasket/interface) を取得
-2. `BilinearForm.Integrators()` から要素行列を `CalcElementMatrix` で計算
-3. 要素ごとにSchur補体を計算し、BDDC前処理を構築
-4. 粗空間ソルバー (SparseCholesky等) を構築
-
-### プロパティ
-
-| プロパティ | 型 | 説明 |
-|-----------|------|------|
-| `num_wirebasket_dofs` | `int` | Wirebasket (粗空間) DOF数 |
-| `num_interface_dofs` | `int` | Interface (局所) DOF数 |
-
-### 使用例
-
-```python
-from ngsolve import *
-from ngsolve.krylovspace import CGSolver
-from sparsesolv_ngsolve import BDDCPreconditioner
-
-# 問題設定
-fes = H1(mesh, order=3, dirichlet="outer")
-u, v = fes.TnT()
-a = BilinearForm(fes)
-a += InnerProduct(grad(u), grad(v)) * dx
-a.Assemble()
-
-# BDDC + CG
-pre = BDDCPreconditioner(a, fes)
-inv = CGSolver(a.mat, pre, tol=1e-10, maxiter=500)
-gfu.vec.data = inv * f.vec
-print(f"Iterations: {inv.iterations}")
-```
 
 ---
 
@@ -142,7 +97,7 @@ gfu.vec.data = inv * f.vec
 
 ## SparseSolvSolver
 
-統合反復法ソルバー。ICCG, SGSMRTR, CG を選択可能。
+統合反復法ソルバー。ICCG, SGSMRTR, CG, COCR を選択可能。
 `BaseMatrix` として使用できるため、`gfu.vec.data = solver * f.vec` の形で呼べる。
 
 ### コンストラクタ
@@ -163,7 +118,7 @@ solver = SparseSolvSolver(mat, method="ICCG", freedofs=None,
 | パラメータ | 型 | 既定値 | 説明 |
 |-----------|------|--------|------|
 | `mat` | `SparseMatrix` | - | SPD行列 |
-| `method` | `str` | `"ICCG"` | `"ICCG"`, `"SGSMRTR"`, `"CG"` |
+| `method` | `str` | `"ICCG"` | `"ICCG"`, `"SGSMRTR"`, `"CG"`, `"COCR"` |
 | `freedofs` | `BitArray` | `None` | 自由DOF |
 | `tol` | `float` | `1e-10` | 収束許容値 |
 | `maxiter` | `int` | `1000` | 最大反復回数 |
@@ -231,4 +186,178 @@ result = solver.Solve(f.vec, gfu.vec)
 if result.converged:
     print(f"Converged in {result.iterations} iterations")
     print(f"Final residual: {result.final_residual:.2e}")
+```
+
+---
+
+## ComplexHypreAMSPreconditioner
+
+複素渦電流系向けのHYPRE AMS前処理 (TaskManager並列Re/Im)。
+
+2つの独立HYPRE AMSインスタンスを作成し、Re/Im部分をNGSolve TaskManagerで
+並列に処理する。Python Re/Im wrapperに対して約1.5x高速化。
+
+HYPRE AMSは非対称前処理 (relax_type=3, hybrid GS) → **GMResSolver必須**。
+
+### コンストラクタ
+
+```python
+pre = ComplexHypreAMSPreconditioner(
+    a_real_mat, grad_mat, freedofs=None,
+    coord_x=[], coord_y=[], coord_z=[],
+    ndof_complex=0, cycle_type=1, print_level=0)
+```
+
+| 引数 | 型 | 既定値 | 説明 |
+|------|------|--------|------|
+| `a_real_mat` | `SparseMatrix` (実数) | - | 実数SPD補助行列 (K + eps*M + \|omega\|*sigma*M) |
+| `grad_mat` | `SparseMatrix` (実数) | - | 離散勾配 G (HCurl -> H1) |
+| `freedofs` | `BitArray` or `None` | `None` | 自由DOF |
+| `coord_x` | `list[float]` | `[]` | 頂点x座標 |
+| `coord_y` | `list[float]` | `[]` | 頂点y座標 |
+| `coord_z` | `list[float]` | `[]` | 頂点z座標 |
+| `ndof_complex` | `int` | `0` | 複素DOF数 (`fes.ndof`) |
+| `cycle_type` | `int` | `1` | HYPRE AMS cycle type |
+| `print_level` | `int` | `0` | HYPRE出力レベル |
+
+### 使用例
+
+```python
+import sparsesolv_ngsolve as ssn
+from ngsolve.krylovspace import GMResSolver
+
+pre = ssn.ComplexHypreAMSPreconditioner(
+    a_real_mat=a_real.mat, grad_mat=G_mat,
+    freedofs=fes_real.FreeDofs(),
+    coord_x=cx, coord_y=cy, coord_z=cz,
+    ndof_complex=fes.ndof, cycle_type=1, print_level=0)
+
+with TaskManager():
+    inv = GMResSolver(mat=a.mat, pre=pre, maxiter=500, tol=1e-8)
+    gfu.vec.data = inv * f.vec
+```
+
+### ベンチマーク結果 (GMRES, tol=1e-8)
+
+| メッシュ | DOFs | Python (逐次) | C++ TaskManager | 高速化 |
+|---------|-----:|---:|---:|---:|
+| 2.5T | 155k | 5.40s, 50 it | **3.43s, 50 it** | **1.57x** |
+| 5.5T | 331k | 14.98s, 59 it | **10.19s, 59 it** | **1.47x** |
+| 20.5T | 1.44M | 103.09s, 75 it | **69.16s, 75 it** | **1.49x** |
+
+反復数は同一 (数学的に同じ、並列化のみ異なる)。
+
+---
+
+## HypreAMSPreconditioner
+
+HYPRE AMS前処理 (オプション)。`SPARSESOLV_USE_HYPRE=ON` でビルド時のみ利用可能。
+`has_hypre()` で利用可否を確認。
+
+### コンストラクタ
+
+```python
+pre = HypreAMSPreconditioner(
+    mat, grad_mat, freedofs=None,
+    coord_x=[], coord_y=[], coord_z=[],
+    cycle_type=1, print_level=0)
+```
+
+| 引数 | 型 | 既定値 | 説明 |
+|------|------|--------|------|
+| `mat` | `SparseMatrix` (実数) | - | 実数SPD行列 |
+| `grad_mat` | `SparseMatrix` (実数) | - | 離散勾配 G |
+| `freedofs` | `BitArray` or `None` | `None` | 自由DOF |
+| `coord_x` | `list[float]` | `[]` | 頂点x座標 |
+| `coord_y` | `list[float]` | `[]` | 頂点y座標 |
+| `coord_z` | `list[float]` | `[]` | 頂点z座標 |
+| `cycle_type` | `int` | `1` | HYPRE AMS cycle type |
+| `print_level` | `int` | `0` | HYPRE出力レベル |
+
+### 使用例
+
+```python
+import sparsesolv_ngsolve as ssn
+
+if ssn.has_hypre():
+    pre = ssn.HypreAMSPreconditioner(
+        a_real.mat, G_mat, fes_real.FreeDofs(),
+        cx, cy, cz, cycle_type=7, print_level=0)
+```
+
+---
+
+## has_hypre
+
+HYPRE利用可否の確認関数。
+
+```python
+ssn.has_hypre()  # -> True if built with SPARSESOLV_USE_HYPRE
+```
+
+---
+
+## COCRSolver
+
+COCR (Conjugate Orthogonal Conjugate Residual) ソルバー。C++ネイティブ実装。
+複素対称系 (A^T=A, NOT Hermitian) の最適短漸化式Krylovソルバー。
+
+非共役内積 (x^T y) を使用。||A*r~||_2を最小化するためCOCGより滑らかな収束。
+1反復あたり: 1 MatVec + 1 前処理適用 (CGと同コスト)。
+
+**参考文献**: Sogabe & Zhang (2007), J. Comput. Appl. Math., 199(2), 297-303.
+
+### 使用方法1: COCRSolver (外部前処理付き)
+
+NGSolveの `CGSolver` と同じインタフェース。AMS前処理等と組み合わせて使用。
+
+```python
+import sparsesolv_ngsolve
+
+inv = sparsesolv_ngsolve.COCRSolver(mat, pre, maxiter=500, tol=1e-8, printrates=False)
+gfu.vec.data = inv * f.vec
+print(f"COCR converged in {inv.iterations} iterations")
+```
+
+| 引数 | 型 | 既定値 | 説明 |
+|------|------|--------|------|
+| `mat` | `BaseMatrix` | - | 複素対称行列 |
+| `pre` | `BaseMatrix` | - | 前処理行列 |
+| `maxiter` | `int` | `500` | 最大反復回数 |
+| `tol` | `float` | `1e-8` | 収束許容値 (相対残差) |
+| `printrates` | `bool` | `False` | 収束情報の表示 |
+
+### 使用方法2: SparseSolvSolver(method="COCR")
+
+SparseSolvSolverの統合インタフェース経由。内部IC前処理。
+
+```python
+solver = sparsesolv_ngsolve.SparseSolvSolver(mat, method="COCR",
+    freedofs=fes.FreeDofs(), tol=1e-10, maxiter=1000)
+gfu.vec.data = solver * f.vec
+result = solver.last_result
+```
+
+### プロパティ
+
+| プロパティ | 型 | 説明 |
+|-----------|------|------|
+| `iterations` | `int` | 実行反復回数 (COCRSolverのみ) |
+
+### 収束判定
+
+```
+sqrt(|rt^T * r|) / sqrt(|rt0^T * r0|) < tol
+```
+ここで `rt = M^{-1} * r` (前処理残差)。
+NGSolveの `CGSolver(conjugate=False)` と同等の収束基準。
+
+### COCG について
+
+COCG (Conjugate Orthogonal CG) は `CGSolver(conjugate=False)` と数学的に等価。
+別途クラスは提供しない。
+
+```python
+from ngsolve.krylovspace import CGSolver
+inv = CGSolver(a.mat, pre, conjugate=False, maxiter=500, tol=1e-8)
 ```

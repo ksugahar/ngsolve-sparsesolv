@@ -3,7 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /// @file dense_matrix.hpp
-/// @brief Small dense matrix with LU inverse for BDDC element-level operations
+/// @brief Small dense matrix with LU inverse
 
 #ifndef SPARSESOLV_CORE_DENSE_MATRIX_HPP
 #define SPARSESOLV_CORE_DENSE_MATRIX_HPP
@@ -71,7 +71,7 @@ namespace detail {
 #endif
 }
 
-/// Small dense matrix (row-major) for element-level BDDC operations
+/// Small dense matrix (row-major) with LU factorization
 template<typename Scalar>
 class DenseMatrix {
 public:

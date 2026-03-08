@@ -3,7 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /// @file sparse_matrix_csr.hpp
-/// @brief Owned CSR matrix storage (IC L factor, BDDC harmonic extension, etc.)
+/// @brief Owned CSR matrix storage (IC L factor, etc.)
 
 #ifndef SPARSESOLV_CORE_SPARSE_MATRIX_CSR_HPP
 #define SPARSESOLV_CORE_SPARSE_MATRIX_CSR_HPP

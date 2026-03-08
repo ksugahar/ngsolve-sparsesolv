@@ -25,5 +25,5 @@ jobs:
         run: pip install . -v
 
       - name: Run tests
-        run: python -m pytest tests/test_sparsesolv.py tests/test_bddc.py -v --tb=short
+        run: python -m pytest tests/test_sparsesolv.py -v --tb=short
 

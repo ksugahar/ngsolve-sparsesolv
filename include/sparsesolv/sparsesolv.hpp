@@ -19,11 +19,10 @@
 // Preconditioners
 #include "preconditioners/ic_preconditioner.hpp"
 #include "preconditioners/sgs_preconditioner.hpp"
-#include "preconditioners/bddc_preconditioner.hpp"
-
 // Solvers
 #include "solvers/iterative_solver.hpp"
 #include "solvers/cg_solver.hpp"
+#include "solvers/cocr_solver.hpp"
 #include "solvers/sgs_mrtr_solver.hpp"
 
 namespace sparsesolv {
@@ -149,6 +148,38 @@ template<typename Scalar = double>
         x.resize(b.size());
     }
     return solve_sgsmrtr(A, b.data(), x.data(), static_cast<index_t>(b.size()), config);
+}
+
+/// Convenience function: Solve Ax=b using COCR (IC preconditioned)
+template<typename Scalar = double>
+[[nodiscard]] inline SolverResult solve_cocr(
+    const SparseMatrixView<Scalar>& A,
+    const Scalar* b,
+    Scalar* x,
+    index_t size,
+    const SolverConfig& config = SolverConfig()
+) {
+    ICPreconditioner<Scalar> precond(config.shift_parameter);
+    precond.set_config(config);
+    precond.setup(A);
+
+    COCRSolver<Scalar> solver;
+    solver.set_config(config);
+    return solver.solve(A, b, x, size, &precond);
+}
+
+/// Convenience function: Solve Ax=b using COCR with std::vector
+template<typename Scalar = double>
+[[nodiscard]] inline SolverResult solve_cocr(
+    const SparseMatrixView<Scalar>& A,
+    const std::vector<Scalar>& b,
+    std::vector<Scalar>& x,
+    const SolverConfig& config = SolverConfig()
+) {
+    if (x.size() != b.size()) {
+        x.resize(b.size());
+    }
+    return solve_cocr(A, b.data(), x.data(), static_cast<index_t>(b.size()), config);
 }
 
 } // namespace sparsesolv

@@ -41,6 +41,15 @@ results_*.json
 # Claude sessions
 .claude/
 
+# MCP config (machine-specific)
+.mcp.json
+
+# External libraries (built locally)
+/external/
+
+# Archive directories
+**/_archive/
+
 # VTK output files
 *.vtu
 *.vtk

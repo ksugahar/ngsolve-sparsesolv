@@ -22,7 +22,7 @@
 2. 変更を実施します
 3. 全テストスイートを実行します：
    ```bash
-   python -m pytest tests/test_sparsesolv.py tests/test_bddc.py -v --tb=short
+   python -m pytest tests/test_sparsesolv.py -v --tb=short
    ```
 4. 明確な説明を付けてプルリクエストを提出します
 

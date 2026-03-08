@@ -3,10 +3,11 @@
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
 
 [NGSolve](https://ngsolve.org/) 有限要素解析向けのヘッダオンリー C++17 反復法ソルバーライブラリ。
-大規模疎行列連立方程式に対して、2つの相補的なアプローチを提供する:
 
-- **BDDC前処理** — 要素単位の領域分割とwirebasket粗空間による前処理。メッシュ非依存の反復回数を実現。NGSolve組込みBDDCと同一のアルゴリズムを実装しており、開発者が独自のBDDCを構築する際のリファレンスとなる。
-- **ABMC並列化ICCG** — 代数的ブロックマルチカラー (ABMC) 順序付けによる並列三角解法付きの不完全コレスキー分解CG。BDDCよりセットアップコストが低く、適度な規模の問題に有効。
+**主な成果**: HCurl有限要素の複素渦電流問題において、[HYPRE](https://github.com/hypre-space/hypre) AMSのhybrid Gauss-Seidel (非対称) スムーザ + GMRESの組み合わせが、対称スムーザ + CGや独自AMS実装よりも大幅に高速であることをベンチマークで示した。1.44M DOFsで75反復収束、独自AMS実装比5.3倍高速。`ComplexHypreAMSPreconditioner` によるRe/Im TaskManager並列で逐次比1.5倍の追加高速化を達成。
+
+- **HYPRE AMS前処理 (メイン)** — [HYPRE](https://github.com/hypre-space/hypre) のAMS (Auxiliary-space Maxwell Solver) をNGSolve `BaseMatrix` にラップ。複素渦電流向けRe/Im 2インスタンス並列 (`ComplexHypreAMSPreconditioner`)。hybrid GS + GMRES必須。
+- **ABMC並列化ICCG** — 代数的ブロックマルチカラー (ABMC) 順序付けによる並列不完全コレスキーCG。メモリ効率に優れ、中規模問題に有効。
 
 `double` と `std::complex<double>` の両方をサポートし、NGSolveのソースツリーとは独立したpybind11拡張モジュール (`sparsesolv_ngsolve`) として提供する。
 
@@ -14,28 +15,75 @@
 
 ## なぜSparseSolvか？
 
-NGSolveには直接法ソルバーと組込みBDDCが搭載されている。SparseSolvはNGSolveが標準では提供しない3つの機能を追加する:
+NGSolveには直接法ソルバーと組込みBDDCが搭載されている。SparseSolvはNGSolveが標準では提供しない機能を追加する:
 
-1. **透過的で独立したBDDC実装** — NGSolveの組込みBDDCはフレームワーク内部に深く埋め込まれたプロダクションコードである。SparseSolvは同一のアルゴリズムを、読みやすく自己完結したC++ヘッダオンリーライブラリとして再実装した。同一問題での反復回数は[NGSolveのBDDCと完全に一致](docs/03_sparsesolv_vs_ngsolve_bddc.ipynb)し、BDDCを学習・改良・拡張したい開発者のリファレンスとなる。
+1. **HYPRE AMS + hybrid GS + GMRESの性能実証** — 複素渦電流 (HCurl p=1) の大規模FEM問題で、HYPRE AMSのhybrid Gauss-Seidelスムーザ (非対称) + GMRESの組み合わせが、対称スムーザ + CGや独自V-cycle AMS実装よりも大幅に高速であることを実証した。HYPRE AMSの20年以上にわたる最適化 (l1-Jacobi HCurlスムーザ + Pi/G補正の統合V-cycle) は独自実装では再現困難であり、HYPRE AMSをそのまま活用することが最善である。`ComplexHypreAMSPreconditioner` はRe/Im 2インスタンスをTaskManagerで並列処理し、Python逐次ラッパーに対して約1.5倍の追加高速化を達成する。
 
-2. **電磁界 (HCurl) 問題への堅牢性** — curl-curl FEM行列は半正定値であり、標準のIC分解は破綻する。SparseSolvのauto-shift ICは破綻を検出し自動調整する。さらにBDDCは、ソース項が離散的にdiv-freeであるかどうかに関わらず収束する — [ICCGでは必須だが実際には保証しにくい条件](docs/02_performance_comparison.ipynb)を不要にする。渦電流問題では導電率項 σ|u|² が自然に正則化として機能するため、curl-curl 単独の場合に比べてICCGでも安定する。純粋なcurl-curl問題では小さな正則化項 `σ*u*v*dx` (σ ≈ 1e-6) を加えることでICCGの安定性を確保できる。
+2. **電磁界 (HCurl) 問題への堅牢性** — curl-curl FEM行列は半正定値であり、標準のIC分解は破綻する。SparseSolvのauto-shift ICは破綻を検出し自動調整する。渦電流問題では導電率項 sigma|u|^2 が自然に正則化として機能するため、curl-curl 単独の場合に比べてICCGでも安定する。純粋なcurl-curl問題では小さな正則化項 `sigma*u*v*dx` (sigma = 1e-6) を加えることでICCGの安定性を確保できる。
 
-3. **ABMCマルチカラー順序付けによる並列ICCG** — IC前処理の三角解法は本質的に逐次的である。ABMC順序付けがこのボトルネックを解消し、並列前進・後退代入を実現する。BDDCのセットアップコストが割に合わない中規模問題でICCGを競争力のあるものにする。
+3. **ABMCマルチカラー順序付けによる並列ICCG** — IC前処理の三角解法は本質的に逐次的である。ABMC順序付けがこのボトルネックを解消し、並列前進・後退代入を実現する。メモリ効率に優れ (CG: ~5ベクトル、GMRES: m反復でmベクトル)、中規模問題に有効。
 
 ## ソルバー選択ガイド
 
 | 問題 | 有限要素空間 | 推奨手法 | 理由 |
 |------|------------|---------|------|
-| Poisson (高次) | H1 (order ≥ 3) | **BDDC+CG** | 2反復、メッシュ非依存 |
-| Poisson (低次) | H1 (order 1-2) | **ICCG** | p=1: BDDC≈PARDISO直接法、ICCG が 10倍以上高速 |
-| 弾性体 | VectorH1 | **BDDC+CG** | ICCGは細分化で反復数増加 |
-| Curl-curl (実数) | HCurl (`nograds=True`) | **BDDC+CG** or **Shifted-ICCG** | BDDCはソース構成に非依存 |
-| 渦電流 (複素数) | HCurl (complex) | **BDDC+CG** (`conjugate=False`) | 複素対称行列対応 |
+| 渦電流 (複素数、大規模) | HCurl (complex, p=1) | **HYPRE AMS+GMRES** | 1.44M DOFsで75反復収束、非対称前処理→GMRES必須 |
+| Curl-curl (実数) | HCurl (`nograds=True`) | **Shifted-ICCG** or **HYPRE AMS** | auto-shift ICで半正定値対応 |
+| Poisson | H1 | **ICCG** | メモリ効率に優れ高速 |
+| 渦電流 (複素数、小中規模) | HCurl (complex) | **ICCG** (`conjugate=False`) or **COCR** | 複素対称行列対応 |
 | 小規模 (< 1K DOFs) | 任意 | 直接法 | 反復法のオーバーヘッド大 |
 
 チュートリアルと計算時間の比較は [tutorials](docs/tutorials.md) を参照。
 
 ## 性能
+
+### HYPRE AMS + GMRES (複素渦電流) — メイン結果
+
+HCurl p=1の大規模複素渦電流問題 (A定式化、f=50Hz) に対するベンチマーク。
+
+#### なぜ hybrid GS + GMRES か？
+
+HYPRE AMS内部のBoomerAMGスムーザには複数の選択肢がある:
+
+| スムーザ (relax_type) | 対称性 | Krylov | 反復数 | 1反復コスト |
+|----------------------|:------:|--------|:------:|:-----------:|
+| **hybrid GS (=3)** | 非対称 | GMRES | **少** | 中 |
+| l1-Jacobi (=2) | 対称 | CG | 多 | 低 |
+| symmetric GS (=6) | 対称 | CG | 中 | 高 (逐次) |
+| Chebyshev (=16) | 対称 | CG | 中 | 中 |
+
+対称スムーザならCG互換だが、**hybrid GS + GMRESが総合的に最速**。理由:
+- hybrid GSはGS (プロセッサ内) + Jacobi (プロセッサ間) のハイブリッドで、GSの高い平滑化効果とJacobiの並列性を両立
+- 反復数の削減がGMRESのKrylov基底メモリコスト (m反復でmベクトル) を上回る
+- 複素渦電流ではRe/Im分割により実質的に実数AMSを2回適用するため、前処理品質 (=反復数の少なさ) が全体性能を支配
+
+#### HYPRE AMS vs 独自AMS実装 — 反復数比較
+
+| メッシュ | DOFs | HYPRE AMS (GMRES) | 独自AMS (CG) |
+|---------|-----:|:------------------:|:------------:|
+| 2.5T | 155k | **50** | 54 |
+| 5.5T | 331k | **59** | 116 |
+| 20.5T | 1.44M | **75** | 394 |
+
+1.44M DOFsでHYPRE AMSは独自AMS比 **5.3倍高速** (75 vs 394反復)。
+ただし、per-iterationでは独自AMSが3.5倍速い (387 vs 1337 ms/it)。
+HYPRE AMSの統合V-cycle構造 (l1-Jacobi HCurlスムーザ + Pi/G補正の最適順序) は独自実装で再現困難であり、反復数の圧倒的優位がper-iterationの速度差を覆す。
+
+#### ComplexHypreAMSPreconditioner ベンチマーク (GMRES, tol=1e-8)
+
+Hiruma渦電流問題 (銅コイル+鉄芯、f=50Hz、8スレッド):
+
+| メッシュ | DOFs | Python逐次 | C++ TaskManager | 高速化 |
+|---------|-----:|---:|---:|---:|
+| 2.5T | 155k | 5.40s, 50 it | **3.43s, 50 it** | **1.57x** |
+| 5.5T | 331k | 14.98s, 59 it | **10.19s, 59 it** | **1.47x** |
+| 20.5T | 1.44M | 103.09s, 75 it | **69.16s, 75 it** | **1.49x** |
+
+反復数は完全に同一 — 数学的に同じ前処理、TaskManager並列化のみの差。
+
+ベンチマーク実行: `python examples/hiruma/bench_hypre_ams.py`
+
+### ABMC ICCG (curl-curl 実数)
 
 3D HCurl curl-curl問題でのベンチマーク (`nograds=True`)。
 
@@ -45,54 +93,35 @@ NGSolveには直接法ソルバーと組込みBDDCが搭載されている。Spa
 |---------|--------|---------|---------|
 | ICCG | 463 | 4.4 s | 1.0x |
 | ICCG + ABMC (8色) | 414 | 2.6 s | **1.7x** |
-| BDDC | 46 | 2.1 s | **2.1x** |
-
-詳細は [04_abmc_parallel_performance.ipynb](docs/04_abmc_parallel_performance.ipynb)。
-ABMCは三角解法のボトルネックを並列化し、ICCG計算時間を短縮。
-BDDCはメッシュ非依存の収束でさらに高速。
-
-**ヘリカルコイル** (565K DOFs, order 2, 1スレッド — ソース構成の堅牢性):
-
-| ソース構成 | ICCG | BDDC |
-|-----------|------|------|
-| ポテンシャルベース `J*v*dx` (非div-free) | 1000反復, **不収束** | 33反復, 収束 |
-| curl-based `T*curl(v)*dx` (div-free) | 119反復, 収束 | 53反復, 収束 |
-
-詳細は [02_performance_comparison.ipynb](docs/02_performance_comparison.ipynb)。
-ICCGはソースが離散的にdiv-freeであることを要求する — 実際には保証しにくい条件。
-BDDCはソース構成に関わらず収束する。
 
 ## ドキュメント
 
 [docs/](docs/) に詳細ドキュメント (日本語) を整備:
 - [アーキテクチャ](docs/architecture.md) — ソースコード構成と設計
-- [アルゴリズム](docs/algorithms.md) — アルゴリズム解説 (BDDC, IC, SGS-MRTR, CG, ABMC)
-- [BDDC実装ガイド](docs/bddc_implementation_details.md) — 理論、疑似コード、API、ベンチマーク
+- [アルゴリズム](docs/algorithms.md) — アルゴリズム解説 (IC, SGS-MRTR, CG, ABMC)
 - [ABMC実装ガイド](docs/abmc_implementation_details.md) — 並列三角解法、性能解析
 - [APIリファレンス](docs/api_reference.md) — Python APIリファレンス
 - [チュートリアル](docs/tutorials.md) — 実践例 (全ソルバー比較)
 - [開発者向け情報](docs/development.md) — ビルド、テスト、開発ノート
 
-### ベンチマーク・ノートブック
-
-| ノートブック | 内容 |
-|------------|------|
-| [01_shift_parameter.ipynb](docs/01_shift_parameter.ipynb) | 半正定値HCurlでのICシフトパラメータ |
-| [02_performance_comparison.ipynb](docs/02_performance_comparison.ipynb) | BDDC vs ICCG vs ICCG+ABMC 性能比較 |
-| [03_sparsesolv_vs_ngsolve_bddc.ipynb](docs/03_sparsesolv_vs_ngsolve_bddc.ipynb) | SparseSolv BDDC = NGSolve BDDC 同等性 |
-
 ## 機能
 
 ### 前処理
-- **BDDC** (Balancing Domain Decomposition by Constraints) — 要素単位構築、wirebasket粗空間、メッシュ非依存反復
+- **HYPRE AMS** (Auxiliary-space Maxwell Solver) — HCurl p=1渦電流向け、**本ライブラリのメイン機能**
+  - `HypreAMSPreconditioner`: 実数SPD行列向け
+  - `ComplexHypreAMSPreconditioner`: TaskManager並列Re/Im (1.5x高速化)
+  - hybrid GS + GMResSolver必須 (非対称前処理)
 - **IC** (不完全コレスキー) — shifted IC(0)、半正定値行列向けauto-shift
 - **SGS** (対称ガウス・ザイデル) — 分解不要
 
 ### 反復法ソルバー
+- **GMRES** — 非対称前処理 (HYPRE AMS) と組み合わせ (NGSolve `GMResSolver`)
 - **CG** (共役勾配法) — SPD系、複素対称 (`conjugate=False`) 対応
+- **COCR** (Conjugate Orthogonal Conjugate Residual) — C++ネイティブ、複素対称系 (A^T=A) の最適短漸化式Krylovソルバー (Sogabe-Zhang 2007)
 - **SGS-MRTR** — split formula内蔵のMRTR
 
 ### 統合手法
+- **HYPRE AMS+GMRES** — HYPRE AMS前処理 + GMResSolver (大規模HCurl渦電流、**推奨**)
 - **ICCG** — CG + IC前処理 (オプションでABMC並列三角解法)
 - **SGSMRTR** — SGS-MRTR (自己完結型)
 
@@ -177,16 +206,47 @@ solver = SparseSolvSolver(a.mat, method="ICCG",
 gfu.vec.data = solver * f.vec
 ```
 
-### BDDC前処理
+### HYPRE AMS + GMRES (複素渦電流、推奨)
+
+HCurl p=1の複素渦電流問題に対するHYPRE AMS前処理。
+`ComplexHypreAMSPreconditioner` がRe/Im部分をTaskManagerで並列処理する。
 
 ```python
-from sparsesolv_ngsolve import BDDCPreconditioner
-from ngsolve.krylovspace import CGSolver
+import sparsesolv_ngsolve as ssn
+from ngsolve import *
+from ngsolve.krylovspace import GMResSolver
 
-# BDDCはBilinearForm + FESpaceを受け取る (行列だけではない)
-pre = BDDCPreconditioner(a, fes)
-inv = CGSolver(a.mat, pre, tol=1e-10)
-gfu.vec.data = inv * f.vec
+# 複素系 A = K + jw*sigma*M を組み立て (省略)
+# 実数SPD補助行列を構築
+fes_real = HCurl(mesh, order=1, nograds=True,
+                 dirichlet="dirichlet", complex=False)
+u_r, v_r = fes_real.TnT()
+a_real = BilinearForm(fes_real)
+a_real += nu_cf * curl(u_r) * curl(v_r) * dx
+a_real += 1e-6 * nu_cf * u_r * v_r * dx
+a_real += abs(omega) * sigma_cf * u_r * v_r * dx("cond")
+a_real.Assemble()
+
+# HYPRE AMS構成要素: 離散勾配、頂点座標
+G_mat, h1_fes = fes_real.CreateGradient()
+
+nv = mesh.nv
+cx, cy, cz = [0.0]*nv, [0.0]*nv, [0.0]*nv
+for i in range(nv):
+    pt = mesh.ngmesh.Points()[i + 1]
+    cx[i], cy[i], cz[i] = pt[0], pt[1], pt[2]
+
+# ComplexHypreAMSPreconditioner (TaskManager並列Re/Im)
+pre = ssn.ComplexHypreAMSPreconditioner(
+    a_real_mat=a_real.mat, grad_mat=G_mat,
+    freedofs=fes_real.FreeDofs(),
+    coord_x=cx, coord_y=cy, coord_z=cz,
+    ndof_complex=fes.ndof, cycle_type=1, print_level=0)
+
+# HYPRE AMSは非対称前処理 → GMResSolver必須 (CGは使用不可)
+with TaskManager():
+    inv = GMResSolver(mat=a.mat, pre=pre, maxiter=500, tol=1e-8)
+    gfu.vec.data = inv * f.vec
 ```
 
 ### ABMC並列化ICCG
@@ -201,10 +261,22 @@ solver = SparseSolvSolver(a.mat, method="ICCG",
 gfu.vec.data = solver * f.vec
 ```
 
-ABMCアルゴリズムは近傍の行をブロックに集約 (BFS集約) した後、
-ブロック隣接グラフを彩色して同色ブロック間の下三角依存関係を排除する。
-三角解法では色を逐次処理し、各色内のブロックを並列に実行する。
-148K DOF HCurl問題 (8スレッド) で、ABMCはICCG計算時間を4.4秒から2.6秒に短縮 (1.7倍高速化)。
+メモリ効率に優れる (CG: ~5ベクトル vs GMRES: m反復でmベクトル)。
+148K DOF HCurl問題 (8スレッド) でICCG計算時間を4.4秒から2.6秒に短縮 (1.7倍高速化)。
+
+### COCRソルバー (複素対称系)
+
+複素対称FEM行列 (渦電流等) にはCOCRが最適。C++ネイティブ実装。
+非共役内積 (x^T y) を使用、||A*r~||_2を最小化するためCGより滑らかな収束。
+
+```python
+import sparsesolv_ngsolve
+
+# 外部前処理 + COCRソルバー (対称前処理が利用可能な場合に推奨)
+inv = sparsesolv_ngsolve.COCRSolver(a.mat, pre, maxiter=500, tol=1e-8)
+gfu.vec.data = inv * f.vec
+print(f"COCR: {inv.iterations} iterations")
+```
 
 ### 前処理 + NGSolve CGSolver
 
@@ -292,12 +364,19 @@ NGSolveの `CGSolver(conjugate=True/False)` に対応。
 
 ```python
 from sparsesolv_ngsolve import (
-    # Factory関数 (mat.IsComplex()で実数/複素数を自動判定)
-    BDDCPreconditioner,            # BDDC (BilinearForm + FESpace API)
+    # HYPRE AMS前処理 (HCurl渦電流向け — メイン機能)
+    HypreAMSPreconditioner,              # 実数HYPRE AMS
+    ComplexHypreAMSPreconditioner,       # 複素Re/Im TaskManager並列
+    HypreBoomerAMGPreconditioner,        # H1 AMG
+    has_hypre,                           # HYPRE利用可否
+
+    # IC/SGS前処理
     ICPreconditioner,              # NGSolve CGSolverと併用
     SGSPreconditioner,             # NGSolve CGSolverと併用
-    SparseSolvSolver,              # 統合ソルバー (ICCG, SGSMRTR)
 
+    # ソルバー
+    SparseSolvSolver,              # 統合ソルバー (ICCG, SGSMRTR)
+    COCRSolver,                    # COCR (複素対称系、C++ネイティブ)
     SparseSolvResult,              # ソルブ結果
 )
 ```
@@ -331,82 +410,102 @@ ngsolve-sparsesolv/
 ├── include/sparsesolv/         # ヘッダオンリーライブラリ
 │   ├── sparsesolv.hpp          # メインヘッダ (全コンポーネントをインクルード)
 │   ├── core/                   # 型、設定、行列ビュー、前処理基底
-│   │   ├── dense_matrix.hpp    # 小規模密行列 + LU逆行列 (BDDC用)
+│   │   ├── dense_matrix.hpp    # 小規模密行列 + LU逆行列
 │   │   ├── sparse_matrix_coo.hpp # COO疎行列 (組立用)
 │   │   ├── sparse_matrix_csr.hpp # CSR疎行列 (格納用)
 │   │   ├── parallel.hpp        # 並列化抽象レイヤ (TaskManager/OpenMP/serial)
 │   │   ├── level_schedule.hpp  # レベルスケジューリング (三角解法並列化)
 │   │   └── abmc_ordering.hpp   # ABMC順序付け (三角解法並列化)
-│   ├── preconditioners/        # IC, SGS, BDDC実装
-│   ├── solvers/                # CG, SGS-MRTR実装
+│   ├── preconditioners/        # IC, SGS, AMS実装
+│   │   ├── ic_preconditioner.hpp          # 不完全コレスキー (auto-shift)
+│   │   ├── sgs_preconditioner.hpp         # 対称ガウス・ザイデル
+│   │   ├── hypre_ams_preconditioner.hpp   # HYPRE AMS + ComplexHypreAMS
+│   │   └── hypre_boomeramg_preconditioner.hpp  # HYPRE BoomerAMG
+│   ├── solvers/                # CG, COCR, SGS-MRTR実装
 │   └── ngsolve/                # NGSolve BaseMatrixラッパー + pybind11エクスポート
 ├── ngsolve/
 │   └── python_module.cpp       # pybind11モジュールエントリポイント
+├── examples/
+│   └── hiruma/                 # 渦電流ベンチマーク (Hiruma問題)
+│       ├── bench_hypre_ams.py  # HYPRE AMS Python vs C++ TaskManager比較
+│       └── eddy_current.py     # A-Phi定式化の渦電流解析
 ├── tests/
-│   ├── test_sparsesolv.py      # ソルバー・前処理テスト
-│   └── test_bddc.py            # BDDC前処理テスト
+│   └── test_sparsesolv.py      # ソルバー・前処理テスト
+├── sparsesolv_ngsolve.pyi      # Python型スタブ
 ├── CMakeLists.txt              # ヘッダオンリーライブラリ + NGSolveモジュールビルド
 └── LICENSE
 ```
 
 ## 参考文献
 
-1. C.R. Dohrmann,
-   "A preconditioner for substructuring based on constrained energy minimization",
-   *SIAM J. Sci. Comput.*, Vol. 25, No. 1, pp. 246–258, 2003.
-   [DOI: 10.1137/S1064827502412887](https://doi.org/10.1137/S1064827502412887)
-   — BDDC前処理の原論文。
-
-2. J. Mandel, C.R. Dohrmann, R. Tezaur,
-   "An algebraic theory for primal and dual substructuring methods by constraints",
-   *Appl. Numer. Math.*, Vol. 54, No. 2, pp. 167–193, 2005.
-   [DOI: 10.1016/j.apnum.2004.09.022](https://doi.org/10.1016/j.apnum.2004.09.022)
-   — BDDCの代数的理論。
-
-3. T. Iwashita, H. Nakashima, Y. Takahashi,
+1. T. Iwashita, H. Nakashima, Y. Takahashi,
    "Algebraic Block Multi-Color Ordering Method for Parallel Multi-Threaded
    Sparse Triangular Solver in ICCG Method",
    *Proc. IEEE 26th International Parallel and Distributed Processing Symposium (IPDPS)*, 2012.
    [DOI: 10.1109/IPDPS.2012.51](https://doi.org/10.1109/IPDPS.2012.51)
    — ABMCオーダリングアルゴリズム。
 
-4. J.A. Meijerink, H.A. van der Vorst,
+2. J.A. Meijerink, H.A. van der Vorst,
    "An iterative solution method for linear systems of which the coefficient matrix
    is a symmetric M-matrix",
    *Math. Comp.*, Vol. 31, No. 137, pp. 148–162, 1977.
    [DOI: 10.1090/S0025-5718-1977-0438681-4](https://doi.org/10.1090/S0025-5718-1977-0438681-4)
    — 不完全コレスキー (IC) 分解。
 
-5. M.R. Hestenes, E. Stiefel,
+3. M.R. Hestenes, E. Stiefel,
    "Methods of conjugate gradients for solving linear systems",
    *J. Res. Nat. Bur. Standards*, Vol. 49, No. 6, pp. 409–436, 1952.
    [DOI: 10.6028/jres.049.044](https://doi.org/10.6028/jres.049.044)
    — 共役勾配 (CG) 法。
 
-6. E. Cuthill, J. McKee,
+4. E. Cuthill, J. McKee,
    "Reducing the bandwidth of sparse symmetric matrices",
    *Proc. 24th National Conference of the ACM*, pp. 157–172, 1969.
    [DOI: 10.1145/800195.805928](https://doi.org/10.1145/800195.805928)
    — Reverse Cuthill-McKee (RCM) 帯域縮小順序付け。
 
-7. 圓谷友紀, 三船泰, 岩下武史, 高橋英治,
+5. 圓谷友紀, 三船泰, 岩下武史, 高橋英治,
    "MRTR法に基づく前処理付き反復法の数値実験",
    *電気学会研究会資料*, SA-12-64, 2012.
    — SGS-MRTR法: 国内研究会論文。
 
-8. T. Tsuburaya, Y. Okamoto, K. Fujiwara, S. Sato,
+6. T. Tsuburaya, Y. Okamoto, K. Fujiwara, S. Sato,
    "Improvement of the Preconditioned MRTR Method With Eisenstat's Technique
    in Real Symmetric Sparse Matrices",
    *IEEE Transactions on Magnetics*, Vol. 49, No. 5, pp. 1641–1644, 2013.
    [DOI: 10.1109/TMAG.2013.2240283](https://doi.org/10.1109/TMAG.2013.2240283)
    — 前処理MRTR法の高速化。
 
-9. 圓谷友紀,
+7. 圓谷友紀,
    "大規模電磁界問題の有限要素解析のための反復法の開発",
    *博士論文*, 宇都宮大学, 2016.
    — 大規模電磁界FEMの反復法に関する包括的参考文献。
 
-10. JP-MARs/SparseSolv,
+8. R. Hiptmair, J. Xu,
+    "Nodal auxiliary space preconditioning in H(curl) and H(div) spaces",
+    *SIAM J. Numer. Anal.*, Vol. 45, No. 6, pp. 2483–2509, 2007.
+    [DOI: 10.1137/060660588](https://doi.org/10.1137/060660588)
+    — AMS (Auxiliary-space Maxwell Solver) の理論的基礎。
+
+9. T.V. Kolev, P.S. Vassilevski,
+    "Parallel auxiliary space AMG for H(curl) problems",
+    *J. Comput. Math.*, Vol. 27, No. 5, pp. 604–623, 2009.
+    [DOI: 10.4208/jcm.2009.27.5.013](https://doi.org/10.4208/jcm.2009.27.5.013)
+    — HYPRE AMSの並列実装。HCurlスムーザ、Pi/G補正の実装詳細。
+
+10. R.D. Falgout, U.M. Yang,
+    "hypre: A library of high performance preconditioners",
+    *Proc. ICCS 2002*, LNCS 2331, pp. 632–641, 2002.
+    [DOI: 10.1007/3-540-47789-6_66](https://doi.org/10.1007/3-540-47789-6_66)
+    — HYPREライブラリ (BoomerAMG, AMS等) の概要。
+
+11. T. Sogabe, S.-L. Zhang,
+    "A COCR method for solving complex symmetric linear systems",
+    *J. Comput. Appl. Math.*, Vol. 199, No. 2, pp. 297–303, 2007.
+    [DOI: 10.1016/j.cam.2005.07.032](https://doi.org/10.1016/j.cam.2005.07.032)
+    — COCR法: 複素対称行列の最適短漸化式Krylovソルバー。
+
+12. JP-MARs/SparseSolv,
     https://github.com/JP-MARs/SparseSolv
 
 ## ライセンス
