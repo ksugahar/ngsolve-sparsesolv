@@ -98,6 +98,10 @@ protected:
     std::vector<sparsesolv::index_t> col_idx_;
     std::vector<SCAL> modified_values_;
 
+    // Cached temp buffer for MultAdd (avoids per-call allocation)
+    mutable std::unique_ptr<SCAL[]> cached_temp_;
+    mutable sparsesolv::index_t cached_temp_size_ = 0;
+
     SparseSolvPrecondBase(shared_ptr<SparseMatrix<SCAL>> mat,
                           shared_ptr<BitArray> freedofs)
         : mat_(mat)
@@ -135,8 +139,12 @@ public:
         const SCAL* x_data = GetVectorData<SCAL>(x);
         SCAL* y_data = GetVectorData<SCAL>(y);
 
-        std::vector<SCAL> temp(height_);
-        apply_precond(x_data, temp.data());
+        if (!cached_temp_ || cached_temp_size_ != height_) {
+            cached_temp_.reset(new SCAL[height_]);
+            cached_temp_size_ = height_;
+        }
+        SCAL* temp = cached_temp_.get();
+        apply_precond(x_data, temp);
 
         if (freedofs_) {
             sparsesolv::parallel_for(height_, [&](sparsesolv::index_t i) {

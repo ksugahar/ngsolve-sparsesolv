@@ -1,37 +1,37 @@
-# ngsolve-sparsesolv への貢献
+# Contributing to ngsolve-sparsesolv
 
-貢献に興味を持っていただきありがとうございます。
+Thank you for your interest in contributing.
 
-## はじめに
+## Getting Started
 
-[docs/development.md](docs/development.md) を参照してください：
-- ビルド手順 (CMake, MKL)
-- テスト実行方法
-- 既知の問題と過去のバグ
+See [docs/development.md](docs/development.md) for:
+- Build instructions (CMake, MKL)
+- How to run tests
+- Known issues and past bugs
 
-## バグ報告
+## Bug Reports
 
-[GitHub Issue](https://github.com/ksugahar/ngsolve-sparsesolv/issues) を以下の情報を含めて作成してください：
-- NGSolve のバージョンと OS
-- 最小限の再現例
-- 期待される動作と実際の動作
+Please create a [GitHub Issue](https://github.com/ksugahar/ngsolve-sparsesolv/issues) with:
+- NGSolve version and OS
+- Minimal reproducible example
+- Expected behavior vs actual behavior
 
-## プルリクエスト
+## Pull Requests
 
-1. リポジトリをフォークしてフィーチャーブランチを作成します
-2. 変更を実施します
-3. 全テストスイートを実行します：
+1. Fork the repository and create a feature branch
+2. Make your changes
+3. Run the full test suite:
    ```bash
    python -m pytest tests/test_sparsesolv.py -v --tb=short
    ```
-4. 明確な説明を付けてプルリクエストを提出します
+4. Submit a pull request with a clear description
 
-### コードスタイル
+### Code Style
 
-- C++17、header-only テンプレート (`<Scalar>` は double/complex 用)
-- 既存の命名規則に従う (関数は snake_case、クラスは CamelCase)
-- NGSolve 固有のコードは `include/sparsesolv/ngsolve/` に分離します
+- C++17, header-only templates (`<Scalar>` for double/complex)
+- Follow existing naming conventions (snake_case for functions, CamelCase for classes)
+- Keep NGSolve-specific code in `include/sparsesolv/ngsolve/`
 
-## ライセンス
+## License
 
-貢献することで、あなたの貢献が [MPL 2.0](LICENSE) の下でライセンスされることに同意します。
+By contributing, you agree that your contributions will be licensed under [MPL 2.0](LICENSE).

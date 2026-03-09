@@ -1,126 +1,116 @@
 # Changelog
 
-このプロジェクトの注目すべき変更点はすべてこのファイルに記録されます。
+All notable changes to this project are documented in this file.
 
-形式は[Keep a Changelog](https://keepachangelog.com/en/1.1.0/)に基づいており、
-このプロジェクトは[Semantic Versioning](https://semver.org/spec/v2.0.0.html)に従っています。
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.5.0] - 2026-03-08
+## [2.6.0] - 2026-03-09
 
-### 追加
-- **BiCGStabソルバー** (`bicgstab_solver.py`) — 非対称前処理対応Krylovソルバー
-  - Van der Vorst (1992) アルゴリズム、固定8作業ベクトル (O(N)メモリ)
-  - HYPRE AMS + BiCGStab: GMRES比33x高速化 (30kHz、1.44M DOFs)
-  - 全メッシュサイズで反復数26回に統一 (GMRES: 50-75回)
-- **EMDベンチマーク** (`bench_emd_comparison.py`) — 比留間EMD前処理との比較
-  - SA-26-001 (比留間、2026.3.5) のEMD前処理結果と比較
-  - HYPRE AMS + BiCGStab: EMD最良 (GenEO-DDM) 比6.5x高速
+### Added
+- **Compact AMS Preconditioner** — Header-only C++ implementation of auxiliary space preconditioning for HCurl
+  - `CompactAMSPreconditioner`: For real HCurl systems (magnetostatic curl-curl + mass)
+  - `ComplexCompactAMSPreconditioner`: For complex eddy current systems, halving bandwidth cost with fused Re/Im SpMV
+  - `CompactAMG`: Classical AMG with PMIS coarsening + l1-Jacobi + DualMult
+  - No external library dependencies, parallelized with NGSolve TaskManager
+  - **`Update()` method** — Supports nonlinear solvers (Newton iterations). Retains geometric information (G, Pi matrices, transposes) while rebuilding only matrix-dependent components (Galerkin projections, AMG hierarchy, l1 norms)
+  - Python type registration: `CompactAMSPreconditionerImpl`, `ComplexCompactAMSPreconditionerImpl`
+- **COCR Solver (C++)** — Krylov solver for complex symmetric systems (A^T=A)
+  - `COCRSolver(mat, pre)`: Native C++ implementation, compatible with NGSolve BaseMatrix
+  - `SparseSolvSolver(method="COCR")`: Also available via SparseSolvSolver dispatch
+  - Header-only: `include/sparsesolv/solvers/cocr_solver.hpp`
+  - Uses unconjugated inner product (x^T y), optimal for complex symmetric FEM matrices in eddy current problems
+- **ABMC vs AMS Benchmark** (`bench_ams_vs_abmc.py`)
 
-### 変更
-- GMRES → BiCGStab: 全ドキュメント・ベンチマーク・コード例を移行
-- SGS前処理のスパース行列参照を非所有ポインタに変更 (二重解放バグ修正)
+### Removed
+- All HYPRE AMS related code (`HypreAMSPreconditioner`, `ComplexHypreAMSPreconditioner`,
+  `HypreBoomerAMGPreconditioner`, `has_hypre()`, `external/hypre/`)
+- BiCGStab solver (`bicgstab_solver.py`)
+- Custom AMS preconditioner (`TaskManagerAMSPreconditioner`, etc.)
+- EMD benchmark (`bench_emd_comparison.py`)
 
-## [2.4.0] - 2026-03-07
-
-### 追加
-- **ComplexHypreAMSPreconditioner** — 複素渦電流向けHYPRE AMS (TaskManager並列Re/Im)
-  - 2つの独立HYPRE AMSインスタンスでRe/Im部分を同時処理
-  - NGSolve TaskManagerによる並列化 (1.5x高速化: 155k~1.44M DOFs)
-  - BiCGStabSolver と組み合わせて使用 (HYPRE AMSは非対称前処理)
-- **COCRソルバー (C++)** — 複素対称系 (A^T=A) 向けKrylovソルバー
-  - `COCRSolver(mat, pre)`: C++ネイティブ実装、NGSolve BaseMatrix互換
-  - `SparseSolvSolver(method="COCR")`: SparseSolvSolverディスパッチからも利用可能
-  - ヘッダオンリー: `include/sparsesolv/solvers/cocr_solver.hpp`
-  - 非共役内積 (x^T y) を使用、渦電流の複素対称FEM行列に最適
-  - COCG (Conjugate Orthogonal CG) は `CGSolver(conjugate=False)` で利用可能
-- `.pyi` 型スタブにComplexHypreAMS、HypreBoomerAMG、has_hypre()を追加
-
-### 削除
-- Custom AMS前処理 (`TaskManagerAMSPreconditioner`, `ComplexTaskManagerAMSPreconditioner`,
-  `FusedComplexTaskManagerAMSPreconditioner`) — HYPRE AMSが反復数で5.2x優位のため
-- `ComputePiSubspaceMatrices`, `ComputeGalerkinH1Matrix`, `ComputeCombinedPiSubspaceMatrix`
-
-### 改善
-- Hiruma例題ディレクトリの整理: デバッグ・中間ファイルを `_archive/` に移動
+### Changed
+- Changed SGS preconditioner sparse matrix reference to non-owning pointer (fixes double-free bug)
+- Reorganized all documentation around Compact AMS + COCR
 
 ## [2.3.0] - 2026-02-28
 
-### 追加
-- Hiruma渦電流問題のメッシュ例題 (6メッシュ、Gmsh v2形式、Git LFS)
-- `examples/hiruma/eddy_current.py` — A-Phi定式化の渦電流解析
+### Added
+- Hiruma eddy current problem mesh examples (6 meshes, Gmsh v2 format, Git LFS)
+- `examples/hiruma/eddy_current.py` — Eddy current analysis with A-Phi formulation
 
-### 改善
-- CG反復のカーネル融合 — メモリトラフィック約20%削減
-  - SpMV + dot(p, Ap) を1パスに融合 (p[], Ap[] の再読込排除)
-  - AXPY + 残差ノルム計算を1パスに融合 (r[] の再読込排除)
-  - 前処理適用 + dot(r, z) を1パスに融合 (`apply_fused_dot`)
-  - 反復あたりのカーネル起動を7回から4回に削減
-- `apply_in_reordered_space` (ABMC空間CGパス) を持続的並列領域に変換
-  - 従来: 2*nc回の parallel_for dispatch (nc=色数)
-  - 改善: 1回の dispatch + 2*nc回の SpinBarrier (`apply_abmc` と同等)
-- ABMC並列IC分解でauto_shift対応 (アトミックフラグによるリスタート)
-  - 従来: auto_shift有効時はABMC並列パスが使えず逐次IC分解にフォールバック
-  - 改善: 並列分解中にbreakdownを検出→シフト増加→全体リスタートで完全並列化
-- Hiruma HCurl p=1 渦電流問題で並列スケーリング 1.5x → 3.14x (8コア)
-- auto_shiftの指数バックオフ (`increment *= 2`) — リスタート回数を大幅削減
-- デフォルト `shift_increment` を 0.01 → 0.05 に変更
-- ノートブック (NB02, NB04) のシフト値を 1.5 → 1.15 に最適化 (反復数 ~7% 改善)
+### Improved
+- Kernel fusion in CG iterations — approximately 20% reduction in memory traffic
+  - Fused SpMV + dot(p, Ap) into a single pass (eliminates re-reading p[] and Ap[])
+  - Fused AXPY + residual norm computation into a single pass (eliminates re-reading r[])
+  - Fused preconditioner application + dot(r, z) into a single pass (`apply_fused_dot`)
+  - Reduced kernel launches per iteration from 7 to 4
+- Converted `apply_in_reordered_space` (ABMC space CG path) to a persistent parallel region
+  - Before: 2*nc parallel_for dispatches (nc = number of colors)
+  - After: 1 dispatch + 2*nc SpinBarrier calls (equivalent to `apply_abmc`)
+- Added auto_shift support for ABMC parallel IC factorization (restart via atomic flags)
+  - Before: ABMC parallel path was unusable when auto_shift was enabled, falling back to sequential IC factorization
+  - After: Detects breakdown during parallel factorization, increases shift, and restarts the entire process for full parallelization
+- Hiruma HCurl p=1 eddy current problem parallel scaling improved from 1.5x to 3.14x (8 cores)
+- Exponential backoff for auto_shift (`increment *= 2`) — significantly reduces restart count
+- Changed default `shift_increment` from 0.01 to 0.05
+- Optimized shift values in notebooks (NB02, NB04) from 1.5 to 1.15 (approximately 7% improvement in iteration count)
 
 ## [2.2.0] - 2026-02-25
 
-### 追加
-- ABMC並列IC分解 (色ごとのparallel_for)
-- レベルスケジューリング三角解法の持続的並列領域 (SpinBarrier)
-- ABMCプロパティのPython API公開 (`use_abmc`, `abmc_block_size`, etc.)
+### Added
+- ABMC parallel IC factorization (parallel_for per color)
+- Persistent parallel region for level-scheduled triangular solve (SpinBarrier)
+- Python API exposure of ABMC properties (`use_abmc`, `abmc_block_size`, etc.)
 
-### 変更
-- ヘッダオンリーインストールからngsolve/ヘッダを除外
+### Changed
+- Excluded ngsolve headers from header-only installation
 
 ## [2.1.0] - 2026-02-21
 
-### 追加
-- `docs/` の日本語ドキュメント (アーキテクチャ、アルゴリズム、API リファレンス、チュートリアル)
-- すべてのソースファイルに MPL 2.0 ライセンスヘッダ
+### Added
+- Japanese documentation in `docs/` (architecture, algorithms, API reference, tutorials)
+- MPL 2.0 license headers in all source files
 - CONTRIBUTING.md
 
-### 変更
-- 未使用の前処理行列を削除 (Identity、Jacobi、ILU)
-- MRTRSolver を削除 (SGS-MRTR は自己完結)
-- IC 前処理行列の重複する `reorder_matrix()` コードを統合
-- 共有 `BuildSparseMatrixView()` を抽出してコード重複を排除
-- pybind11 型登録を簡潔化 (ファクトリが公開 API)
+### Changed
+- Removed unused preconditioner matrices (Identity, Jacobi, ILU)
+- Removed MRTRSolver (SGS-MRTR is self-contained)
+- Consolidated duplicate `reorder_matrix()` code in IC preconditioner matrix
+- Extracted shared `BuildSparseMatrixView()` to eliminate code duplication
+- Simplified pybind11 type registration (factory is the public API)
 
-### 修正
-- DenseMatrix::invert() 置換行列の構成 (P^T → P)
-- 複素数内積: 複素対称 FEM 行列の非共役内積
-  - 渦電流の発散を修正 (5000 反復 → 58 反復)
-- SGS-MRTR 複素数比較: 閾値チェックに `std::real(denom)` を使用
+### Fixed
+- DenseMatrix::invert() permutation matrix construction (P^T to P)
+- Complex inner product: unconjugated inner product for complex symmetric FEM matrices
+  - Fixed eddy current divergence (5000 iterations reduced to 58 iterations)
+- SGS-MRTR complex comparison: use `std::real(denom)` for threshold check
 
 ## [2.0.0] - 2026-02-19
 
-### 追加
-- NGSolve とは独立したスタンドアロン pybind11 モジュール (`sparsesolv_ngsolve.pyd`)
-- 自動ディスパッチ機能を備えたファクトリ関数 (`mat.IsComplex()` による実数/複素数の自動判定)
-- 半正定値行列の自動シフト IC 分解 (curl-curl)
-- 条件数改善のための対角スケーリング
-- ABMC (Algebraic Block Multi-Color) 順序付け (並列三角解法用)
-- RCM 帯域幅削減 (オプション、ABMC と組み合わせ)
-- 複素数対応 (`std::complex<double>`) を完全サポート
-- 発散検出と最良結果の復帰
-- 残差履歴記録
-- レベルスケジュール三角解法の永続並列領域
+### Added
+- Standalone pybind11 module independent of NGSolve (`sparsesolv_ngsolve.pyd`)
+- Factory function with automatic dispatch (automatic real/complex detection via `mat.IsComplex()`)
+- Automatic shift IC factorization for semi-definite matrices (curl-curl)
+- Diagonal scaling for condition number improvement
+- ABMC (Algebraic Block Multi-Color) ordering (for parallel triangular solve)
+- RCM bandwidth reduction (optional, combinable with ABMC)
+- Full complex number support (`std::complex<double>`)
+- Divergence detection with best result recovery
+- Residual history recording
+- Persistent parallel region for level-scheduled triangular solve
 
-### 変更
-- ヘッダオンリー C++17 ライブラリとして再構成
-- `SPARSESOLV_USE_NGSOLVE_TASKMANAGER` コンパイルフラグによる NGSolve 統合
-- 並列化の抽象化: TaskManager / OpenMP / シリアル ディスパッチ
+### Changed
+- Restructured as a header-only C++17 library
+- NGSolve integration via `SPARSESOLV_USE_NGSOLVE_TASKMANAGER` compile flag
+- Parallelization abstraction: TaskManager / OpenMP / serial dispatch
 
 ## [1.0.0] - 2026-02-01
 
-[JP-MARs/SparseSolv](https://github.com/JP-MARs/SparseSolv) からの初回フォーク。
+Initial fork from [JP-MARs/SparseSolv](https://github.com/JP-MARs/SparseSolv).
 
-### 上流からの機能
-- シフトパラメータ付き IC(0) 前処理行列
-- SGS 前処理行列
-- CG ソルバー
-- 分割公式による SGS-MRTR ソルバー
+### Features from upstream
+- IC(0) preconditioner matrix with shift parameter
+- SGS preconditioner matrix
+- CG solver
+- SGS-MRTR solver with splitting formula

@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "sparsesolv-ngsolve"
-version = "2.4.0"
+version = "2.6.0"
 description = "SparseSolv iterative solvers for NGSolve"
 readme = "README.md"
 license = {text = "MPL-2.0"}

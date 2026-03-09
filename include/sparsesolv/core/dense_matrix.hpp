@@ -162,6 +162,9 @@ public:
 
     /// Compute inverse in-place via LU decomposition
     void invert() {
+        if (rows_ != cols_)
+            throw std::runtime_error("DenseMatrix::invert: matrix must be square ("
+                + std::to_string(rows_) + " x " + std::to_string(cols_) + ")");
         const index_t n = rows_;
         if (n == 0) return;
 

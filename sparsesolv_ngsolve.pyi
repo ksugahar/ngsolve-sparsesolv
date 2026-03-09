@@ -1,7 +1,8 @@
 """Type stubs for sparsesolv_ngsolve — SparseSolv iterative solvers for NGSolve.
 
 Provides IC/SGS preconditioners, ICCG/SGSMRTR iterative solvers,
-and HYPRE AMS preconditioners for HCurl eddy-current problems.
+Compact AMS preconditioners for HCurl eddy-current problems,
+and COCR/GMRES Krylov solvers.
 """
 
 from ngsolve import BaseMatrix, BaseVector, BitArray
@@ -20,10 +21,15 @@ __all__ = [
     "COCRSolverD",
     "COCRSolverC",
     "COCRSolver",
-    "HypreAMSPreconditioner",
-    "ComplexHypreAMSPreconditioner",
-    "HypreBoomerAMGPreconditioner",
-    "has_hypre",
+    "GMRESSolverD",
+    "GMRESSolverC",
+    "GMRESSolver",
+    "CompactAMSPreconditionerImpl",
+    "ComplexCompactAMSPreconditionerImpl",
+    "CompactAMSPreconditioner",
+    "ComplexCompactAMSPreconditioner",
+    "CompactAMGPreconditioner",
+    "has_compact_ams",
 ]
 
 # =============================================================================
@@ -51,6 +57,14 @@ class ICPreconditionerD(BaseMatrix):
 
     shift: float
     """IC shift parameter."""
+    use_abmc: bool
+    """Enable ABMC ordering for parallel triangular solves."""
+    abmc_block_size: int
+    """Rows per block in ABMC aggregation."""
+    abmc_num_colors: int
+    """Target number of colors for ABMC coloring."""
+    diagonal_scaling: bool
+    """Diagonal scaling for improved conditioning."""
 
     def Update(self) -> None:
         """Recompute the IC factorization with current shift."""
@@ -61,6 +75,14 @@ class ICPreconditionerC(BaseMatrix):
 
     shift: float
     """IC shift parameter."""
+    use_abmc: bool
+    """Enable ABMC ordering for parallel triangular solves."""
+    abmc_block_size: int
+    """Rows per block in ABMC aggregation."""
+    abmc_num_colors: int
+    """Target number of colors for ABMC coloring."""
+    diagonal_scaling: bool
+    """Diagonal scaling for improved conditioning."""
 
     def Update(self) -> None:
         """Recompute the IC factorization with current shift."""
@@ -100,33 +122,33 @@ class SparseSolvSolverD(BaseMatrix):
     shift: float
     """IC shift parameter."""
     auto_shift: bool
-    """Auto-increase shift on IC breakdown (for semi-definite systems)."""
+    """Auto-increase shift on IC breakdown (default: False)."""
     diagonal_scaling: bool
-    """Diagonal scaling for improved conditioning."""
+    """Diagonal scaling for improved conditioning (default: False)."""
     save_best_result: bool
-    """Track and return the best iterate found."""
+    """Track and return the best iterate found (default: True)."""
     save_residual_history: bool
-    """Record residual at each iteration."""
+    """Record residual at each iteration (default: False)."""
     printrates: bool
-    """Print convergence info to stdout."""
+    """Print convergence info to stdout (default: False)."""
     conjugate: bool
-    """Use conjugated inner product for Hermitian systems."""
+    """Use conjugated inner product for Hermitian systems (default: False)."""
     divergence_check: bool
-    """Enable stagnation-based divergence detection."""
+    """Enable stagnation-based divergence detection (default: True)."""
     divergence_threshold: float
-    """Threshold for divergence detection."""
+    """Threshold for divergence detection (default: 1.0)."""
     divergence_count: int
-    """Iterations before declaring divergence."""
+    """Iterations before declaring divergence (default: 50)."""
     use_abmc: bool
-    """Enable ABMC ordering for parallel triangular solves."""
+    """Enable ABMC ordering for parallel triangular solves (default: False)."""
     abmc_block_size: int
-    """Rows per block in ABMC aggregation."""
+    """Rows per block in ABMC aggregation (default: 4)."""
     abmc_num_colors: int
-    """Target number of colors for ABMC coloring."""
+    """Target number of colors for ABMC coloring (default: 4)."""
     abmc_reorder_spmv: bool
-    """Reorder SpMV in ABMC space (experimental)."""
+    """Reorder SpMV in ABMC space (default: False)."""
     abmc_use_rcm: bool
-    """Use RCM ordering (experimental)."""
+    """Use RCM ordering (default: False)."""
 
     @property
     def last_result(self) -> SparseSolvResult:
@@ -153,7 +175,9 @@ class SparseSolvSolverC(BaseMatrix):
     maxiter: int
     shift: float
     auto_shift: bool
+    """Auto-increase shift on IC breakdown (default: False)."""
     diagonal_scaling: bool
+    """Diagonal scaling for improved conditioning (default: False)."""
     save_best_result: bool
     save_residual_history: bool
     printrates: bool
@@ -284,6 +308,7 @@ class COCRSolverC(BaseMatrix):
 def COCRSolver(
     mat: BaseMatrix,
     pre: BaseMatrix,
+    freedofs: BitArray | None = None,
     maxiter: int = 500,
     tol: float = 1e-8,
     printrates: bool = False,
@@ -311,10 +336,149 @@ def COCRSolver(
     ...
 
 # =============================================================================
-# ComplexHypreAMSPreconditioner (TaskManager parallel Re/Im)
+# GMRES Solver (C++ native, NGSolve BaseMatrix interface)
 # =============================================================================
 
-def ComplexHypreAMSPreconditioner(
+class GMRESSolverD(BaseMatrix):
+    """GMRES solver for real (double) non-symmetric matrices."""
+
+    @property
+    def iterations(self) -> int:
+        """Number of iterations performed in last solve."""
+        ...
+
+class GMRESSolverC(BaseMatrix):
+    """GMRES solver for complex non-symmetric matrices."""
+
+    @property
+    def iterations(self) -> int:
+        """Number of iterations performed in last solve."""
+        ...
+
+def GMRESSolver(
+    mat: BaseMatrix,
+    pre: BaseMatrix,
+    freedofs: BitArray | None = None,
+    maxiter: int = 500,
+    tol: float = 1e-8,
+    restart: int = 0,
+    printrates: bool = False,
+) -> GMRESSolverD | GMRESSolverC:
+    """Left-preconditioned GMRES solver for non-symmetric linear systems.
+
+    Optimal for AMS-preconditioned eddy current problems where COCR
+    cannot be used (non-symmetric preconditioner).
+
+    Auto-dispatches to real/complex based on ``mat.IsComplex()``.
+
+    Args:
+        mat: System matrix (real or complex).
+        pre: Preconditioner (BaseMatrix).
+        freedofs: Free DOFs mask.
+        maxiter: Maximum iterations (default: 500).
+        tol: Relative convergence tolerance (default: 1e-8).
+        restart: GMRES restart (0 = full, default: 0).
+        printrates: Print convergence info (default: False).
+    """
+    ...
+
+# =============================================================================
+# CompactAMG Preconditioner
+# =============================================================================
+
+def CompactAMGPreconditioner(
+    mat: BaseMatrix,
+    freedofs: BitArray | None = None,
+    theta: float = 0.25,
+    max_levels: int = 25,
+    min_coarse: int = 50,
+    num_smooth: int = 1,
+    print_level: int = 0,
+) -> BaseMatrix:
+    """Compact AMG (Algebraic Multigrid) preconditioner for H1 Poisson-type systems.
+
+    Header-only implementation, no external dependency.
+    Uses classical AMG with PMIS coarsening and extended+i interpolation.
+
+    Args:
+        mat: Real SPD sparse matrix.
+        freedofs: Free DOFs mask.
+        theta: Strength threshold (default: 0.25).
+        max_levels: Maximum AMG levels (default: 25).
+        min_coarse: Minimum coarsest-level DOFs (default: 50).
+        num_smooth: Smoother sweeps per level (default: 1).
+        print_level: Verbosity (default: 0).
+    """
+    ...
+
+# =============================================================================
+# Compact AMS Preconditioner types (with Update() for nonlinear solvers)
+# =============================================================================
+
+class CompactAMSPreconditionerImpl(BaseMatrix):
+    """Compact AMS preconditioner for real HCurl systems.
+
+    Supports ``Update()`` for Newton iteration: geometry (G, Pi matrices)
+    is preserved, only matrix-dependent parts are rebuilt.
+    """
+
+    def Update(self, new_mat: BaseMatrix | None = None) -> None:
+        """Rebuild with current or new matrix values (geometry preserved).
+
+        Args:
+            new_mat: If provided, replaces the system matrix before rebuilding.
+                     If None, rebuilds using the current matrix.
+        """
+        ...
+
+def CompactAMSPreconditioner(
+    mat: BaseMatrix,
+    grad_mat: BaseMatrix,
+    freedofs: BitArray | None = None,
+    coord_x: list[float] = ...,
+    coord_y: list[float] = ...,
+    coord_z: list[float] = ...,
+    cycle_type: int = 1,
+    print_level: int = 0,
+    subspace_solver: int = 0,
+    num_smooth: int = 1,
+) -> CompactAMSPreconditionerImpl:
+    """Compact AMS (Auxiliary-space Maxwell Solver) Preconditioner.
+
+    For real HCurl curl-curl + mass systems. No external dependency.
+    Supports ``Update()`` for Newton iteration.
+
+    Args:
+        mat: Real HCurl system matrix.
+        grad_mat: Discrete gradient G (HCurl -> H1).
+        freedofs: Free DOFs mask.
+        coord_x: Vertex x-coordinates (length = H1 DOFs).
+        coord_y: Vertex y-coordinates.
+        coord_z: Vertex z-coordinates.
+        cycle_type: AMS cycle type (1=01210, 7=0201020, default=1).
+        print_level: Verbosity (default: 0).
+        subspace_solver: 0=CompactAMG (default), 1=SparseCholesky.
+        num_smooth: Smoother sweeps (default: 1).
+    """
+    ...
+
+class ComplexCompactAMSPreconditionerImpl(BaseMatrix):
+    """Complex Compact AMS preconditioner with fused Re/Im operations.
+
+    Supports ``Update()`` for Newton iteration: geometry is preserved,
+    only matrix-dependent parts are rebuilt.
+    """
+
+    def Update(self, new_a_real: BaseMatrix | None = None) -> None:
+        """Rebuild with current or new real auxiliary matrix (geometry preserved).
+
+        Args:
+            new_a_real: If provided, replaces the real auxiliary matrix before rebuilding.
+                        If None, rebuilds using the current matrix.
+        """
+        ...
+
+def ComplexCompactAMSPreconditioner(
     a_real_mat: BaseMatrix,
     grad_mat: BaseMatrix,
     freedofs: BitArray | None = None,
@@ -324,15 +488,17 @@ def ComplexHypreAMSPreconditioner(
     ndof_complex: int = 0,
     cycle_type: int = 1,
     print_level: int = 0,
-) -> BaseMatrix:
-    """Complex HYPRE AMS with TaskManager-parallel Re/Im splitting.
-
-    Creates TWO independent HYPRE AMS instances and applies them
-    to Re and Im parts concurrently via NGSolve TaskManager.
-    Only available when built with ``SPARSESOLV_USE_HYPRE=ON``.
+    correction_weight: float = 1.0,
+    subspace_solver: int = 0,
+    num_smooth: int = 1,
+) -> ComplexCompactAMSPreconditionerImpl:
+    """Complex Compact AMS preconditioner with fused Re/Im operations.
 
     For complex eddy-current systems ``A = K + jw*sigma*M``.
-    Use with ``BiCGStabSolver`` (HYPRE AMS is non-symmetric).
+    Uses CompactAMG (header-only, no external dependency).
+    Supports ``Update()`` for Newton iteration.
+
+    Use with ``COCRSolver`` (complex symmetric) or ``GMRESSolver``.
 
     Args:
         a_real_mat: Real SPD auxiliary matrix (K + eps*M + |omega|*sigma*M).
@@ -341,68 +507,15 @@ def ComplexHypreAMSPreconditioner(
         coord_x: Vertex x-coordinates.
         coord_y: Vertex y-coordinates.
         coord_z: Vertex z-coordinates.
-        ndof_complex: Complex DOF count.
-        cycle_type: HYPRE AMS cycle type (default: 1).
-        print_level: HYPRE print level (default: 0).
+        ndof_complex: Complex DOF count (0 = auto-derive from matrix).
+        cycle_type: AMS cycle type (default: 1).
+        print_level: Verbosity (default: 0).
+        correction_weight: Correction weight (default: 1.0).
+        subspace_solver: Subspace solver type (default: 0 = CompactAMG).
+        num_smooth: Number of smoothing steps (default: 1).
     """
     ...
 
-# =============================================================================
-# HYPRE AMS Preconditioner (conditional: SPARSESOLV_USE_HYPRE)
-# =============================================================================
-
-def HypreAMSPreconditioner(
-    mat: BaseMatrix,
-    grad_mat: BaseMatrix,
-    freedofs: BitArray | None = None,
-    coord_x: list[float] = ...,
-    coord_y: list[float] = ...,
-    coord_z: list[float] = ...,
-    cycle_type: int = 1,
-    print_level: int = 0,
-) -> BaseMatrix:
-    """HYPRE AMS (Auxiliary-space Maxwell Solver) Preconditioner.
-
-    Uses HYPRE's BoomerAMG-based AMS for real HCurl systems.
-    Only available when built with ``SPARSESOLV_USE_HYPRE=ON``.
-    Check availability with ``has_hypre()``.
-
-    Args:
-        mat: Real SPD sparse matrix.
-        grad_mat: Discrete gradient G (HCurl -> H1).
-        freedofs: Free DOFs mask.
-        coord_x: Vertex x-coordinates.
-        coord_y: Vertex y-coordinates.
-        coord_z: Vertex z-coordinates.
-        cycle_type: HYPRE AMS cycle type (default: 1).
-        print_level: HYPRE print level (default: 0).
-    """
-    ...
-
-def HypreBoomerAMGPreconditioner(
-    mat: BaseMatrix,
-    freedofs: BitArray | None = None,
-    print_level: int = 0,
-    relax_type: int = 6,
-    coarsen_type: int = 10,
-    num_functions: int = 1,
-    dof_func: list[int] | None = None,
-) -> BaseMatrix:
-    """HYPRE BoomerAMG Preconditioner for H1 scalar elliptic systems.
-
-    Only available when built with ``SPARSESOLV_USE_HYPRE=ON``.
-
-    Args:
-        mat: Real SPD sparse matrix.
-        freedofs: Free DOFs mask.
-        print_level: HYPRE print level (default: 0).
-        relax_type: Smoother type (default: 6, symmetric GS).
-        coarsen_type: Coarsening type (default: 10, HMIS).
-        num_functions: Block size for systems AMG (default: 1).
-        dof_func: DOF-to-function mapping for systems AMG.
-    """
-    ...
-
-def has_hypre() -> bool:
-    """Returns True if HYPRE support is available (built with SPARSESOLV_USE_HYPRE)."""
+def has_compact_ams() -> bool:
+    """Returns True if Compact AMG/AMS support is available."""
     ...

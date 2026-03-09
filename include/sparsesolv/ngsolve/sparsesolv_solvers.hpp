@@ -3,11 +3,11 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /// @file sparsesolv_solvers.hpp
-/// @brief SparseSolv iterative solvers (ICCG, SGSMRTR, CG, COCR) as NGSolve BaseMatrix wrappers
+/// @brief SparseSolv iterative solvers as NGSolve BaseMatrix wrappers
 ///
 /// Separated from sparsesolv_precond.hpp for clarity of responsibility:
 /// - sparsesolv_precond.hpp: preconditioners (IC, SGS, BDDC)
-/// - sparsesolv_solvers.hpp: iterative solvers (SparseSolvSolver, COCRSolverNGS)
+/// - sparsesolv_solvers.hpp: iterative solvers (SparseSolvSolver, COCRSolverNGS, GMRESSolverNGS)
 
 #ifndef NGSOLVE_SPARSESOLV_SOLVERS_HPP
 #define NGSOLVE_SPARSESOLV_SOLVERS_HPP
@@ -25,7 +25,7 @@ using SparseSolvResult = sparsesolv::SolverResult;
 // SparseSolv Iterative Solver
 // ============================================================================
 
-/// Unified iterative solver: ICCG, SGSMRTR, CG, COCR.
+/// Unified iterative solver: ICCG, SGSMRTR, CG, COCR, BiCGStab.
 /// Use as BaseMatrix (inv * rhs) or call .Solve() for detailed results.
 ///
 /// Uses internal preconditioner (IC for ICCG, SGS for SGSMRTR, none for CG/COCR).
@@ -121,10 +121,19 @@ public:
             sparsesolv::COCRSolver<SCAL> solver;
             solver.set_config(config);
             result = solver.solve(view, b_ptr, x_ptr, height_, nullptr);
+        } else if (method_ == "BiCGStab" || method_ == "bicgstab" || method_ == "BICGSTAB") {
+            // IC-preconditioned BiCGStab
+            sparsesolv::ICPreconditioner<SCAL> precond(config.shift_parameter);
+            precond.set_config(config);
+            precond.setup(view);
+
+            sparsesolv::BiCGStabSolver<SCAL> solver;
+            solver.set_config(config);
+            result = solver.solve(view, b_ptr, x_ptr, height_, &precond);
         } else {
             throw std::runtime_error(
                 "SparseSolvSolver: Unknown method '" + method_ +
-                "'. Available: ICCG, SGSMRTR, CG, COCR");
+                "'. Available: ICCG, SGSMRTR, CG, COCR, BiCGStab");
         }
 
         // Copy solution back (only free DOFs)
@@ -247,10 +256,9 @@ private:
 /// Use this when you have a custom preconditioner (any BaseMatrix).
 /// For internal IC/SGS preconditioner, use SparseSolvSolver(method="COCR") instead.
 ///
-/// Note on convergence criterion: uses preconditioned residual sqrt(|rt^T * r|)
-/// where rt = M^{-1}*r. This differs from the raw COCRSolver<SCAL> which uses
-/// unpreconditioned ||r||. The preconditioned residual is standard for
-/// preconditioned Krylov solvers (consistent with NGSolve's CGSolver).
+/// Note on convergence criterion: uses true residual norm ||r|| / ||rhs||.
+/// This differs from the raw COCRSolver<SCAL> which uses the same criterion
+/// but via the iterative_solver framework.
 ///
 /// Usage: inv = COCRSolverNGS(mat, pre, maxiter, tol); gfu.vec = inv * rhs;
 template<typename SCAL>
@@ -258,16 +266,22 @@ class COCRSolverNGS : public BaseMatrix {
 public:
     COCRSolverNGS(shared_ptr<BaseMatrix> mat,
                   shared_ptr<BaseMatrix> pre,
+                  shared_ptr<BitArray> freedofs = nullptr,
                   int maxiter = 500,
                   double tol = 1e-8,
                   bool printrates = false)
         : mat_(std::move(mat)), pre_(std::move(pre)),
+          freedofs_(std::move(freedofs)),
           maxiter_(maxiter), tol_(tol), printrates_(printrates),
           iterations_(0) {}
 
     /// Solve: y = A^{-1} * x  (y initialized to zero)
+    /// COCR is optimal for complex symmetric systems (A^T = A).
+    /// Uses unconjugated inner products throughout.
+    /// Optimized: fused vector updates reduce memory bandwidth by ~60%.
     void Mult(const BaseVector& rhs, BaseVector& sol) const override {
         sol = 0.0;
+        size_t n = rhs.Size();
 
         auto r = rhs.CreateVector();
         auto rt = rhs.CreateVector();
@@ -276,9 +290,22 @@ public:
         auto qt = rhs.CreateVector();
         auto t = rhs.CreateVector();
 
-        // r = rhs - A*sol
+        // Raw pointers for fused operations (stable for lifetime of vectors)
+        SCAL* sol_d = GetVectorData<SCAL>(sol);
+        SCAL* r_d   = GetVectorData<SCAL>(*r);
+        SCAL* rt_d  = GetVectorData<SCAL>(*rt);
+        SCAL* p_d   = GetVectorData<SCAL>(*p);
+        SCAL* q_d   = GetVectorData<SCAL>(*q);
+        SCAL* qt_d  = GetVectorData<SCAL>(*qt);
+        SCAL* t_d   = GetVectorData<SCAL>(*t);
+
+        // r = rhs (projected to free DOFs)
         *r = rhs;
-        *r -= *mat_ * sol;
+        project(r_d, n);
+
+        // Compute true RHS norm for relative residual
+        double rhs_norm = std::sqrt(std::abs(InnerProduct<SCAL>(*r, *r, true)));
+        if (rhs_norm < 1e-30) { iterations_ = 0; return; }
 
         // rt = M^{-1} * r
         *rt = *pre_ * *r;
@@ -288,26 +315,17 @@ public:
 
         // q = A * p
         *q = *mat_ * *p;
+        project(q_d, n);
 
-        // rho = rt^T * q (unconjugated)
+        // rho = rt^T * q (unconjugated: complex symmetric inner product)
         SCAL rho = InnerProduct<SCAL>(*rt, *q, false);
 
-        // Convergence measure: sqrt(|rt^T * r|) (preconditioned residual)
-        SCAL wdn = InnerProduct<SCAL>(*rt, *r, false);
-        double res0 = std::sqrt(std::abs(wdn));
-
-        if (res0 < 1e-30) {
-            iterations_ = 0;
-            return;
-        }
-
-        double final_res = res0 * tol_;
         if (printrates_)
-            std::cout << "COCR iter 0: res = " << res0 << std::endl;
+            std::cout << "COCR iter 0: res = 1" << std::endl;
 
         int j = 0;
         for (j = 0; j < maxiter_; ++j) {
-            // qt = M^{-1} * q
+            // qt = M^{-1} * q  (preconditioner apply - dominant cost)
             *qt = *pre_ * *q;
 
             // mu = qt^T * q (unconjugated)
@@ -317,29 +335,29 @@ public:
 
             SCAL alpha = rho / mu;
 
-            // x += alpha * p
-            sol += alpha * *p;
+            // Fused: sol += alpha*p, r -= alpha*q, rt -= alpha*qt
+            // (3 separate loops -> 1 pass, ~3x less memory bandwidth)
+            ParallelFor(n, [=](size_t i) {
+                sol_d[i] += alpha * p_d[i];
+                r_d[i]   -= alpha * q_d[i];
+                rt_d[i]  -= alpha * qt_d[i];
+            });
 
-            // r -= alpha * q
-            *r -= alpha * *q;
-
-            // rt -= alpha * qt (vector update, NOT precond solve)
-            *rt -= alpha * *qt;
-
-            // Convergence: sqrt(|rt^T * r|) (preconditioned residual)
-            wdn = InnerProduct<SCAL>(*rt, *r, false);
-            double res = std::sqrt(std::abs(wdn));
+            // Convergence: use Hermitian norm of r for reliable check
+            double res = std::sqrt(std::abs(InnerProduct<SCAL>(*r, *r, true)));
 
             if (printrates_)
-                std::cout << "COCR iter " << (j+1) << ": res = " << res << std::endl;
+                std::cout << "COCR iter " << (j+1) << ": res = "
+                          << res / rhs_norm << std::endl;
 
-            if (res <= final_res) {
+            if (res / rhs_norm <= tol_) {
                 iterations_ = j + 1;
                 return;
             }
 
-            // t = A * rt
+            // t = A * rt  (system SpMV)
             *t = *mat_ * *rt;
+            project(t_d, n);
 
             // rho_new = rt^T * t (unconjugated)
             SCAL rho_new = InnerProduct<SCAL>(*rt, *t, false);
@@ -349,13 +367,12 @@ public:
             SCAL beta = rho_new / rho;
             rho = rho_new;
 
-            // p = rt + beta * p
-            *p *= beta;
-            *p += *rt;
-
-            // q = t + beta * q
-            *q *= beta;
-            *q += *t;
+            // Fused: p = rt + beta*p, q = t + beta*q
+            // (4 separate ops -> 1 pass)
+            ParallelFor(n, [=](size_t i) {
+                p_d[i] = rt_d[i] + beta * p_d[i];
+                q_d[i] = t_d[i]  + beta * q_d[i];
+            });
         }
         iterations_ = j;
     }
@@ -369,10 +386,228 @@ public:
     int GetIterations() const { return iterations_; }
 
 private:
+    /// Zero constrained DOFs (parallel)
+    void project(SCAL* data, size_t n) const {
+        if (!freedofs_) return;
+        const auto& fd = *freedofs_;
+        ParallelFor(n, [&](size_t i) {
+            if (!fd.Test(i)) data[i] = SCAL(0);
+        });
+    }
+
     shared_ptr<BaseMatrix> mat_;
     shared_ptr<BaseMatrix> pre_;
+    shared_ptr<BitArray> freedofs_;
     int maxiter_;
     double tol_;
+    bool printrates_;
+    mutable int iterations_;
+};
+
+// ============================================================================
+// GMRES Solver with External Preconditioner
+// ============================================================================
+
+/// Right-preconditioned GMRES as NGSolve BaseMatrix.
+///
+/// For non-symmetric systems with AMS preconditioner.
+/// 1 SpMV + 1 preconditioner application per iteration.
+/// Monitors true residual ||b - Ax|| (not preconditioned residual).
+///
+/// Usage: inv = GMRESSolverNGS(mat, pre, freedofs, maxiter, tol); gfu.vec = inv * rhs;
+template<typename SCAL>
+class GMRESSolverNGS : public BaseMatrix {
+    static SCAL conj_(SCAL x) {
+        if constexpr (std::is_same_v<SCAL, double>)
+            return x;
+        else
+            return std::conj(x);
+    }
+public:
+    GMRESSolverNGS(shared_ptr<BaseMatrix> mat,
+                   shared_ptr<BaseMatrix> pre,
+                   shared_ptr<BitArray> freedofs = nullptr,
+                   int maxiter = 500,
+                   double tol = 1e-8,
+                   int restart = 0,
+                   bool printrates = false)
+        : mat_(std::move(mat)), pre_(std::move(pre)),
+          freedofs_(std::move(freedofs)),
+          maxiter_(maxiter), tol_(tol),
+          restart_(restart > 0 ? restart : maxiter),
+          printrates_(printrates), iterations_(0) {}
+
+    void Mult(const BaseVector& rhs, BaseVector& sol) const override {
+        sol = 0.0;
+        static constexpr bool conjugate = !std::is_same_v<SCAL, double>;
+
+        auto w = rhs.CreateVector();
+        auto r = rhs.CreateVector();
+
+        // Initial residual: r = rhs (since sol=0), projected
+        *r = rhs;
+        project(*r);
+
+        double rhs_norm = norm(*r, conjugate);
+        if (rhs_norm < 1e-30) { iterations_ = 0; return; }
+
+        double beta = rhs_norm;
+
+        if (printrates_)
+            std::cout << "GMRES iter 0: res = 1" << std::endl;
+
+        int m = std::min(maxiter_, restart_);
+        int total_iter = 0;
+
+        // Pre-allocate Arnoldi vectors (reused across restart cycles)
+        std::vector<AutoVector> V, Z;
+        V.reserve(m + 1);
+        Z.reserve(m);
+        for (int i = 0; i <= m; ++i)
+            V.push_back(std::move(rhs.CreateVector()));
+        for (int i = 0; i < m; ++i)
+            Z.push_back(std::move(rhs.CreateVector()));
+
+        for (int cycle = 0; total_iter < maxiter_; ++cycle) {
+            if (cycle > 0) {
+                // Recompute true residual: r = rhs - A*sol
+                *r = rhs;
+                project(*r);
+                *r -= *mat_ * sol;
+                project(*r);
+                beta = norm(*r, conjugate);
+                if (beta / rhs_norm < tol_) break;
+            }
+
+            *V[0] = (1.0 / beta) * *r;
+
+            std::vector<std::vector<SCAL>> H(m);
+            std::vector<double> cs(m);
+            std::vector<SCAL> sn(m);
+            std::vector<SCAL> g(m + 1, SCAL(0));
+            g[0] = SCAL(beta);
+
+            int j;
+            for (j = 0; j < m && total_iter < maxiter_; ++j, ++total_iter) {
+                // z = M^{-1} * V[j]
+                if (pre_)
+                    *Z[j] = *pre_ * *V[j];
+                else
+                    *Z[j] = *V[j];
+
+                // w = A * z
+                *w = *mat_ * *Z[j];
+                project(*w);
+
+                // Modified Gram-Schmidt (numerically stable, sequential)
+                H[j].resize(j + 2);
+                for (int i = 0; i <= j; ++i) {
+                    H[j][i] = InnerProduct<SCAL>(*V[i], *w, conjugate);
+                    *w -= H[j][i] * *V[i];
+                }
+                double h_next = norm(*w, conjugate);
+                H[j][j + 1] = SCAL(h_next);
+
+                if (h_next > 1e-30)
+                    *V[j + 1] = (1.0 / h_next) * *w;
+
+                // Apply previous Givens rotations
+                for (int i = 0; i < j; ++i) {
+                    SCAL h_i   = H[j][i];
+                    SCAL h_ip1 = H[j][i + 1];
+                    H[j][i]     = cs[i] * h_i + sn[i] * h_ip1;
+                    H[j][i + 1] = SCAL(-1) * conj_(sn[i]) * h_i + cs[i] * h_ip1;
+                }
+
+                // New Givens rotation
+                compute_givens(H[j][j], H[j][j + 1], cs[j], sn[j]);
+                H[j][j] = cs[j] * H[j][j] + sn[j] * H[j][j + 1];
+                H[j][j + 1] = SCAL(0);
+
+                SCAL g_j = g[j];
+                g[j]     = cs[j] * g_j;
+                g[j + 1] = SCAL(-1) * conj_(sn[j]) * g_j;
+
+                double res = std::abs(g[j + 1]) / rhs_norm;
+                if (printrates_)
+                    std::cout << "GMRES iter " << total_iter + 1
+                              << ": res = " << res << std::endl;
+
+                if (res < tol_ || h_next < 1e-30) {
+                    j++;
+                    total_iter++;
+                    break;
+                }
+            }
+
+            // Back-solve upper triangular H * y = g
+            int dim = j;
+            std::vector<SCAL> y(dim);
+            for (int i = dim - 1; i >= 0; --i) {
+                y[i] = g[i];
+                for (int k = i + 1; k < dim; ++k)
+                    y[i] -= H[k][i] * y[k];
+                if (std::abs(H[i][i]) > 1e-30)
+                    y[i] /= H[i][i];
+            }
+
+            // Update solution: x += Z * y (right-preconditioned)
+            for (int i = 0; i < dim; ++i)
+                sol += y[i] * *Z[i];
+
+            double res = std::abs(g[dim]) / rhs_norm;
+            if (res < tol_) break;
+        }
+
+        iterations_ = total_iter;
+    }
+
+    int VHeight() const override { return mat_->VHeight(); }
+    int VWidth() const override { return mat_->VWidth(); }
+    AutoVector CreateRowVector() const override { return mat_->CreateRowVector(); }
+    AutoVector CreateColVector() const override { return mat_->CreateColVector(); }
+    bool IsComplex() const override { return mat_->IsComplex(); }
+
+    int GetIterations() const { return iterations_; }
+
+private:
+    void project(BaseVector& vec) const {
+        if (!freedofs_) return;
+        SCAL* data = GetVectorData<SCAL>(vec);
+        size_t n = vec.Size();
+        ParallelFor(n, [&](size_t i) {
+            if (!freedofs_->Test(i))
+                data[i] = SCAL(0);
+        });
+    }
+
+    static double norm(const BaseVector& v, bool conj) {
+        return std::sqrt(std::abs(InnerProduct<SCAL>(v, v, conj)));
+    }
+
+    /// Compute Givens rotation: [c s; -conj(s) c] * [a; b] = [r; 0]
+    /// Standard complex Givens (LAPACK ZLARTG convention):
+    ///   c = |a|/d, s = a*conj(b)/(|a|*d), r = a*d/|a|
+    static void compute_givens(SCAL a, SCAL b, double& c, SCAL& s) {
+        if (std::abs(b) < 1e-30) {
+            c = 1.0;
+            s = SCAL(0);
+        } else if (std::abs(a) < 1e-30) {
+            c = 0.0;
+            s = SCAL(1);
+        } else {
+            double denom = std::sqrt(std::norm(a) + std::norm(b));
+            c = std::abs(a) / denom;
+            s = a * conj_(b) / (std::abs(a) * denom);
+        }
+    }
+
+    shared_ptr<BaseMatrix> mat_;
+    shared_ptr<BaseMatrix> pre_;
+    shared_ptr<BitArray> freedofs_;
+    int maxiter_;
+    double tol_;
+    int restart_;
     bool printrates_;
     mutable int iterations_;
 };

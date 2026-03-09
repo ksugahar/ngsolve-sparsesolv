@@ -1,76 +1,76 @@
-# アーキテクチャとソースコード解説
+# Architecture and Source Code Guide
 
-## ディレクトリ構成
+## Directory Structure
 
 ```
 ngsolve-sparsesolv/
-├── include/sparsesolv/           # ヘッダオンリーライブラリ本体
-│   ├── sparsesolv.hpp            # メインヘッダ (全コンポーネントをインクルード)
-│   ├── core/                     # 基盤コンポーネント
-│   │   ├── types.hpp             # 型定義 (index_t, complex_t)
-│   │   ├── constants.hpp         # 数値定数 (許容値、閾値)
-│   │   ├── solver_config.hpp     # SolverConfig 構造体
-│   │   ├── sparse_matrix_view.hpp # CSR行列の非所有ビュー (ゼロコピー)
-│   │   ├── sparse_matrix_coo.hpp # COO形式 (組立用)
-│   │   ├── sparse_matrix_csr.hpp # CSR形式 (格納用)
-│   │   ├── dense_matrix.hpp      # 密行列 + LU逆行列
-│   │   ├── preconditioner.hpp    # 前処理基底クラス (テンプレート)
-│   │   ├── parallel.hpp          # 並列化抽象レイヤ (TaskManager/OpenMP/serial)
-│   │   ├── level_schedule.hpp    # レベルスケジューリング (三角解法並列化)
-│   │   ├── abmc_ordering.hpp     # ABMC順序付け (三角解法並列化)
-│   │   └── rcm_ordering.hpp      # RCM帯域縮小順序付け
-│   ├── preconditioners/          # 前処理実装
-│   │   ├── ic_preconditioner.hpp # 不完全コレスキー (IC) 分解
-│   │   ├── sgs_preconditioner.hpp # 対称ガウス・ザイデル (SGS)
-│   │   └── hypre_ams_preconditioner.hpp # HYPRE AMS (条件付: SPARSESOLV_USE_HYPRE)
-│   ├── solvers/                  # 反復法ソルバー
-│   │   ├── iterative_solver.hpp  # 反復法基底クラス
-│   │   ├── cg_solver.hpp         # 共役勾配法 (CG)
+├── include/sparsesolv/           # Header-only library core
+│   ├── sparsesolv.hpp            # Main header (includes all components)
+│   ├── core/                     # Foundation components
+│   │   ├── types.hpp             # Type definitions (index_t, complex_t)
+│   │   ├── constants.hpp         # Numerical constants (tolerances, thresholds)
+│   │   ├── solver_config.hpp     # SolverConfig struct
+│   │   ├── sparse_matrix_view.hpp # Non-owning CSR matrix view (zero-copy)
+│   │   ├── sparse_matrix_coo.hpp # COO format (for assembly)
+│   │   ├── sparse_matrix_csr.hpp # CSR format (for storage)
+│   │   ├── dense_matrix.hpp      # Dense matrix + LU inverse
+│   │   ├── preconditioner.hpp    # Preconditioner base class (template)
+│   │   ├── parallel.hpp          # Parallelization abstraction layer (TaskManager/OpenMP/serial)
+│   │   ├── level_schedule.hpp    # Level scheduling (triangular solve parallelization)
+│   │   ├── abmc_ordering.hpp     # ABMC ordering (triangular solve parallelization)
+│   │   └── rcm_ordering.hpp      # RCM bandwidth reduction ordering
+│   ├── preconditioners/          # Preconditioner implementations
+│   │   ├── ic_preconditioner.hpp # Incomplete Cholesky (IC) factorization
+│   │   ├── sgs_preconditioner.hpp # Symmetric Gauss-Seidel (SGS)
+│   │   ├── compact_amg.hpp     # CompactAMG (classical AMG, header-only)
+│   │   ├── compact_ams.hpp     # CompactAMS (Hiptmair-Xu auxiliary space preconditioner)
+│   │   └── complex_compact_ams.hpp # ComplexCompactAMS (fused Re/Im for eddy current)
+│   ├── solvers/                  # Iterative solvers
+│   │   ├── iterative_solver.hpp  # Iterative solver base class
+│   │   ├── cg_solver.hpp         # Conjugate Gradient (CG)
 │   │   └── sgs_mrtr_solver.hpp   # SGS-MRTR (split formula)
-│   └── ngsolve/                  # NGSolve統合レイヤ
+│   └── ngsolve/                  # NGSolve integration layer
 │       ├── sparsesolv_precond.hpp # BaseMatrix wrappers (IC, SGS, BDDC, Solver)
-│       └── sparsesolv_python_export.hpp # pybind11バインディング + factory関数
+│       └── sparsesolv_python_export.hpp # pybind11 bindings + factory functions
 ├── ngsolve/
-│   └── python_module.cpp         # pybind11モジュールエントリポイント
+│   └── python_module.cpp         # pybind11 module entry point
 ├── tests/
-│   └── test_sparsesolv.py        # ソルバー・前処理テスト
-├── docs/                         # ドキュメント (本フォルダ)
-├── external/
-│   └── hypre/                    # HYPRE ライブラリ (SPARSESOLV_USE_HYPRE=ON時)
-├── CMakeLists.txt                # ビルド設定
+│   └── test_sparsesolv.py        # Solver and preconditioner tests
+├── docs/                         # Documentation (this folder)
+├── CMakeLists.txt                # Build configuration
 └── LICENSE
 ```
 
-## 設計原則
+## Design Principles
 
-### ヘッダオンリー
+### Header-Only
 
-全てのC++コードは `.hpp` ヘッダファイルに実装されている。
-コンパイル時に全コードがインライン展開されるため、リンク問題がなく配布が容易。
+All C++ code is implemented in `.hpp` header files.
+Since all code is inlined at compile time, there are no linking issues and distribution is straightforward.
 
-### テンプレート設計
+### Template Design
 
-全アルゴリズムクラスは `template<typename Scalar>` でパラメータ化されている:
+All algorithm classes are parameterized with `template<typename Scalar>`:
 
 ```cpp
 template<typename Scalar = double>
 class ICPreconditioner : public Preconditioner<Scalar> { ... };
 ```
 
-`Scalar` には `double` と `std::complex<double>` が使用される。
-これにより実数問題と複素数問題 (渦電流等) を単一コードベースで処理する。
+`Scalar` is instantiated with either `double` or `std::complex<double>`.
+This allows both real and complex problems (e.g., eddy current) to be handled within a single codebase.
 
-### 並列化抽象レイヤ
+### Parallelization Abstraction Layer
 
-`core/parallel.hpp` がコンパイル時にバックエンドを切り替える:
+`core/parallel.hpp` switches the backend at compile time:
 
-| ビルド設定 | バックエンド | 用途 |
+| Build Configuration | Backend | Use Case |
 |---|---|---|
-| `SPARSESOLV_USE_NGSOLVE_TASKMANAGER` | NGSolve TaskManager | NGSolve統合時 |
-| `_OPENMP` | OpenMP | スタンドアロン |
-| (どちらもなし) | シリアル実行 | デバッグ |
+| `SPARSESOLV_USE_NGSOLVE_TASKMANAGER` | NGSolve TaskManager | When integrated with NGSolve |
+| `_OPENMP` | OpenMP | Standalone |
+| (neither) | Serial execution | Debugging |
 
-主要API:
+Main API:
 
 ```cpp
 sparsesolv::parallel_for(n, [&](index_t i) { ... });
@@ -78,10 +78,10 @@ sparsesolv::parallel_reduce(n, init, [&](index_t i) -> T { ... });
 sparsesolv::get_num_threads();
 ```
 
-## ヘッダ依存関係
+## Header Dependencies
 
 ```
-sparsesolv.hpp (メインヘッダ)
+sparsesolv.hpp (main header)
 ├── core/types.hpp
 ├── core/constants.hpp
 ├── core/solver_config.hpp
@@ -101,22 +101,22 @@ sparsesolv.hpp (メインヘッダ)
     ← solvers/iterative_solver.hpp, core/level_schedule.hpp
 ```
 
-NGSolve統合レイヤ (NGSolveビルド時のみ):
+NGSolve integration layer (only when building with NGSolve):
 
 ```
 ngsolve/sparsesolv_precond.hpp   ← sparsesolv.hpp + NGSolve headers
 ngsolve/sparsesolv_python_export.hpp ← sparsesolv_precond.hpp + pybind11
 ```
 
-## NGSolve統合レイヤ
+## NGSolve Integration Layer
 
-### SparseMatrixView (ゼロコピーラッパー)
+### SparseMatrixView (Zero-Copy Wrapper)
 
-NGSolveの `SparseMatrix<SCAL>` はCSRライクな内部構造を持つ。
-`SparseSolvPrecondBase::prepare_matrix_view()` が、データコピーなしに
-SparseSolvの `SparseMatrixView<SCAL>` に変換する。
+NGSolve's `SparseMatrix<SCAL>` has a CSR-like internal structure.
+`SparseSolvPrecondBase::prepare_matrix_view()` converts it to
+SparseSolv's `SparseMatrixView<SCAL>` without copying any data.
 
-FreeDofs処理: 拘束DOFの行は単位行列 (対角=1, 非対角=0) に置換。
+FreeDofs handling: rows for constrained DOFs are replaced with identity rows (diagonal=1, off-diagonal=0).
 
 ```cpp
 // sparsesolv_precond.hpp: SparseSolvPrecondBase::prepare_matrix_view()
@@ -127,25 +127,35 @@ if (!freedofs_->Test(i)) {
 }
 ```
 
-### SparseSolvPrecondBase (BaseMatrix wrapper)
+### SparseSolvPrecondBase (BaseMatrix Wrapper)
 
-全前処理クラスの基底。NGSolveの `BaseMatrix` を継承し、
-`Mult()` / `MultAdd()` を実装して NGSolve の `CGSolver` と互換にする。
+Base class for all preconditioners. Inherits from NGSolve's `BaseMatrix` and
+implements `Mult()` / `MultAdd()` for compatibility with NGSolve's `CGSolver`.
 
 ```
-SparseSolvPrecondBase<SCAL>  (抽象基底)
+SparseSolvPrecondBase<SCAL>  (abstract base)
 ├── SparseSolvICPreconditioner<SCAL>    → ICPreconditioner<SCAL>
 ├── SparseSolvSGSPreconditioner<SCAL>   → SGSPreconditioner<SCAL>
 └── SparseSolvSolver<SCAL>              → ICCG/SGSMRTR/CG
 
-HypreAMSPreconditioner  (BaseMatrix直接継承, 実数のみ)
-  → HYPRE AMS (条件付: SPARSESOLV_USE_HYPRE)
+CompactAMS  (inherits BaseMatrix directly)
+  → Real HCurl AMS preconditioner (magnetostatics, supports Update())
+  → Python: CompactAMSPreconditionerImpl
+
+ComplexCompactAMS  (inherits BaseMatrix directly)
+  → Complex eddy current fused Re/Im AMS preconditioner (supports Update())
+  → Python: ComplexCompactAMSPreconditionerImpl
 ```
 
-### Python factory関数 (auto-dispatch)
+Nonlinear solver support via Update():
+- `Update()`: Rebuilds the preconditioner with the current matrix (geometric information is retained)
+- `Update(new_mat)`: Rebuilds the preconditioner with a new matrix
+- Geometric information (G, Pi matrices, transposes) is computed only during initial construction
 
-`sparsesolv_python_export.hpp` の factory関数は、行列の型を自動判定して
-適切なテンプレートインスタンスを生成する:
+### Python Factory Functions (Auto-Dispatch)
+
+The factory functions in `sparsesolv_python_export.hpp` automatically determine
+the matrix type and create the appropriate template instance:
 
 ```cpp
 // ICPreconditioner factory
@@ -158,5 +168,21 @@ m.def("ICPreconditioner", [](shared_ptr<BaseMatrix> mat, ...) {
 });
 ```
 
-BDDCアルゴリズムの詳細は [algorithms.md](algorithms.md) を参照。
-NGSolveの組込みBDDC (`a.mat.Inverse(fes.FreeDofs(), inverse="bddc")`) を使用する。
+### Type Registration (AMS)
+
+CompactAMS / ComplexCompactAMS register concrete types via `py::class_`,
+and the factory functions return concrete types, making `Update()` accessible from Python:
+
+```cpp
+// Type registration
+py::class_<CompactAMS, shared_ptr<CompactAMS>, BaseMatrix>
+    (m, "CompactAMSPreconditionerImpl")
+    .def("Update", py::overload_cast<>(&CompactAMS::Update))
+    .def("Update", py::overload_cast<shared_ptr<SparseMatrix<double>>>(&CompactAMS::Update));
+
+// Factory (returns concrete type)
+m.def("CompactAMSPreconditioner", [...] -> shared_ptr<CompactAMS> { ... });
+```
+
+For details on the BDDC algorithm, see [algorithms.md](algorithms.md).
+It uses NGSolve's built-in BDDC (`a.mat.Inverse(fes.FreeDofs(), inverse="bddc")`).

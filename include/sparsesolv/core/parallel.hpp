@@ -139,6 +139,9 @@ class SpinBarrier {
 public:
     explicit SpinBarrier(int num_threads)
         : num_threads_(num_threads) {
+        if (num_threads < 1)
+            throw std::invalid_argument("SpinBarrier: num_threads must be >= 1, got "
+                + std::to_string(num_threads));
         count_.store(0, std::memory_order_relaxed);
         sense_.store(0, std::memory_order_relaxed);
     }

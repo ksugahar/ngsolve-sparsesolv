@@ -15,10 +15,10 @@
 #include <comp.hpp>
 #include <type_traits>
 
-#ifdef SPARSESOLV_USE_HYPRE
-#include "sparsesolv/preconditioners/hypre_ams_preconditioner.hpp"
-#include "sparsesolv/preconditioners/hypre_boomeramg_preconditioner.hpp"
-#endif
+// Compact AMG/AMS (TaskManager-based, no external dependency)
+#include "sparsesolv/preconditioners/compact_amg.hpp"
+#include "sparsesolv/preconditioners/compact_ams.hpp"
+#include "sparsesolv/preconditioners/complex_compact_ams.hpp"
 
 
 namespace py = pybind11;
@@ -300,10 +300,11 @@ Can be used as BaseMatrix (inverse operator) or via Solve() for detailed results
 Parameters:
 
 mat : SparseMatrix
-  SPD matrix (real or complex).
+  System matrix (real or complex).
 method : str
   "ICCG", "SGSMRTR", "CG", or "COCR".
   COCR: Conjugate Orthogonal Conjugate Residual for complex-symmetric A^T=A.
+  For non-symmetric systems, use GMRESSolver instead.
 freedofs : BitArray, optional
   Free DOFs.
 tol : float
@@ -329,12 +330,80 @@ Properties (set after construction):
 }
 
 // ============================================================================
-// HYPRE AMS factory (conditional on SPARSESOLV_USE_HYPRE)
+// Compact AMG/AMS factory (TaskManager-based)
 // ============================================================================
 
-#ifdef SPARSESOLV_USE_HYPRE
-inline void ExportHypreAMS(py::module& m) {
-  m.def("HypreAMSPreconditioner",
+inline void ExportCompactAMS(py::module& m) {
+
+  // Type registrations for CompactAMS / ComplexCompactAMS (enables Update() from Python)
+  py::class_<CompactAMS, shared_ptr<CompactAMS>, BaseMatrix>
+      (m, "CompactAMSPreconditionerImpl")
+      .def("Update", py::overload_cast<>(&CompactAMS::Update),
+           "Rebuild preconditioner with current matrix values (geometry preserved).")
+      .def("Update", py::overload_cast<shared_ptr<SparseMatrix<double>>>(&CompactAMS::Update),
+           py::arg("new_mat"),
+           "Update with a new system matrix, then rebuild.");
+
+  py::class_<ComplexCompactAMS, shared_ptr<ComplexCompactAMS>, BaseMatrix>
+      (m, "ComplexCompactAMSPreconditionerImpl")
+      .def("Update", py::overload_cast<>(&ComplexCompactAMS::Update),
+           "Rebuild preconditioner with current matrix values (geometry preserved).")
+      .def("Update", py::overload_cast<shared_ptr<SparseMatrix<double>>>(&ComplexCompactAMS::Update),
+           py::arg("new_a_real"),
+           "Update with a new real auxiliary matrix, then rebuild.");
+
+  m.def("CompactAMGPreconditioner",
+    [](shared_ptr<BaseMatrix> mat,
+       py::object freedofs_obj,
+       double theta,
+       int max_levels,
+       int min_coarse,
+       int num_smooth,
+       int print_level) -> shared_ptr<BaseMatrix>
+    {
+      auto sp_mat = dynamic_pointer_cast<SparseMatrix<double>>(mat);
+      if (!sp_mat)
+        throw py::type_error("CompactAMGPreconditioner: expected real SparseMatrix<double>");
+      auto sp_freedofs = ExtractFreeDofs(freedofs_obj);
+
+      auto amg = make_shared<CompactAMG>(sp_mat, sp_freedofs, theta,
+                                          max_levels, min_coarse, num_smooth,
+                                          print_level);
+      amg->Setup();
+      return amg;
+    },
+    py::arg("mat"),
+    py::arg("freedofs") = py::none(),
+    py::arg("theta") = 0.25,
+    py::arg("max_levels") = 25,
+    py::arg("min_coarse") = 50,
+    py::arg("num_smooth") = 1,
+    py::arg("print_level") = 0,
+    R"raw_string(
+Compact Algebraic Multigrid (AMG) Preconditioner.
+
+TaskManager-parallel AMG for scalar H1 problems. No external dependency.
+Uses PMIS coarsening + classical interpolation + l1-Jacobi smoother.
+
+Parameters:
+
+mat : SparseMatrix (real)
+  H1 system matrix.
+freedofs : BitArray, optional
+  Free DOFs mask.
+theta : float
+  Strength threshold (default=0.25 for 3D).
+max_levels : int
+  Maximum AMG levels (default=25).
+min_coarse : int
+  Minimum DOFs for direct solve (default=50).
+num_smooth : int
+  Smoother sweeps per level (default=1).
+print_level : int
+  Verbosity (0=silent, default=0).
+)raw_string");
+
+  m.def("CompactAMSPreconditioner",
     [](shared_ptr<BaseMatrix> mat,
        shared_ptr<BaseMatrix> grad_mat,
        py::object freedofs_obj,
@@ -342,19 +411,20 @@ inline void ExportHypreAMS(py::module& m) {
        py::list coord_y_list,
        py::list coord_z_list,
        int cycle_type,
-       int print_level) -> shared_ptr<BaseMatrix>
+       int print_level,
+       int subspace_solver,
+       int num_smooth) -> shared_ptr<CompactAMS>
     {
       auto sp_mat = dynamic_pointer_cast<SparseMatrix<double>>(mat);
       if (!sp_mat)
-        throw py::type_error("HypreAMSPreconditioner: system matrix must be real SparseMatrix<double>");
+        throw py::type_error("CompactAMSPreconditioner: expected real SparseMatrix<double>");
 
       auto sp_grad = dynamic_pointer_cast<SparseMatrix<double>>(grad_mat);
       if (!sp_grad)
-        throw py::type_error("HypreAMSPreconditioner: gradient matrix must be real SparseMatrix<double>");
+        throw py::type_error("CompactAMSPreconditioner: grad_mat must be real SparseMatrix<double>");
 
       auto sp_freedofs = ExtractFreeDofs(freedofs_obj);
 
-      // Convert Python lists to std::vector<double>
       auto to_vec = [](py::list lst) {
         std::vector<double> v(lst.size());
         for (size_t i = 0; i < lst.size(); i++)
@@ -362,10 +432,10 @@ inline void ExportHypreAMS(py::module& m) {
         return v;
       };
 
-      return make_shared<HypreAMSPreconditioner>(
+      return make_shared<CompactAMS>(
           sp_mat, sp_grad, sp_freedofs,
           to_vec(coord_x_list), to_vec(coord_y_list), to_vec(coord_z_list),
-          cycle_type, print_level);
+          cycle_type, num_smooth, 0.25, print_level, 1.0, subspace_solver);
     },
     py::arg("mat"),
     py::arg("grad_mat"),
@@ -375,16 +445,18 @@ inline void ExportHypreAMS(py::module& m) {
     py::arg("coord_z") = py::list(),
     py::arg("cycle_type") = 1,
     py::arg("print_level") = 0,
+    py::arg("subspace_solver") = 0,
+    py::arg("num_smooth") = 1,
     R"raw_string(
-HYPRE AMS (Auxiliary-space Maxwell Solver) Preconditioner.
+Compact AMS (Auxiliary-space Maxwell Solver) Preconditioner.
 
-Uses HYPRE's AMS for real HCurl curl-curl + mass systems.
-For complex problems, use Re/Im splitting at the Python level.
+TaskManager-parallel AMS for HCurl curl-curl + mass systems. No external dependency.
+Uses CompactAMG as sub-solver for gradient and nodal auxiliary spaces.
 
 Parameters:
 
 mat : SparseMatrix (real)
-  Assembled system matrix (must be nonsymmetric storage).
+  HCurl system matrix (must be nonsymmetric storage).
 grad_mat : SparseMatrix (real)
   Discrete gradient matrix (HCurl -> H1).
 freedofs : BitArray, optional
@@ -392,96 +464,12 @@ freedofs : BitArray, optional
 coord_x, coord_y, coord_z : list of float
   Vertex coordinates (length = number of H1 DOFs).
 cycle_type : int
-  AMS cycle type (1=additive, 2=multiplicative, default=1).
+  AMS cycle type (1=01210, 7=0201020, default=1).
 print_level : int
-  HYPRE print level (0=silent, default=0).
+  Verbosity (0=silent, default=0).
 )raw_string");
 
-  m.def("has_hypre", []() { return true; },
-    "Returns True if HYPRE support is available.");
-
-  // BoomerAMG standalone preconditioner for H1 systems
-  m.def("HypreBoomerAMGPreconditioner",
-    [](shared_ptr<BaseMatrix> mat,
-       py::object freedofs_obj,
-       int print_level,
-       int coarsen_type,
-       int relax_type,
-       int agg_levels,
-       double strong_threshold,
-       int interp_type,
-       int max_levels,
-       int num_sweeps,
-       int coarse_relax_type,
-       int num_functions,
-       py::object dof_func_obj) -> shared_ptr<BaseMatrix>
-    {
-      auto sp_mat = dynamic_pointer_cast<SparseMatrix<double>>(mat);
-      if (!sp_mat)
-        throw py::type_error("HypreBoomerAMGPreconditioner: expected real SparseMatrix<double>");
-      auto sp_freedofs = ExtractFreeDofs(freedofs_obj);
-
-      std::vector<HYPRE_Int> dof_func;
-      if (!dof_func_obj.is_none()) {
-        auto dof_func_list = dof_func_obj.cast<py::list>();
-        dof_func.resize(dof_func_list.size());
-        for (size_t i = 0; i < dof_func_list.size(); i++)
-          dof_func[i] = dof_func_list[i].cast<HYPRE_Int>();
-      }
-
-      return make_shared<HypreBoomerAMGPreconditioner>(
-          sp_mat, sp_freedofs, print_level,
-          coarsen_type, relax_type, agg_levels, strong_threshold,
-          interp_type, max_levels, num_sweeps, coarse_relax_type,
-          num_functions, std::move(dof_func));
-    },
-    py::arg("mat"),
-    py::arg("freedofs") = py::none(),
-    py::arg("print_level") = 0,
-    py::arg("coarsen_type") = 10,
-    py::arg("relax_type") = 6,
-    py::arg("agg_levels") = 1,
-    py::arg("strong_threshold") = 0.25,
-    py::arg("interp_type") = 0,
-    py::arg("max_levels") = 25,
-    py::arg("num_sweeps") = 1,
-    py::arg("coarse_relax_type") = 9,
-    py::arg("num_functions") = 1,
-    py::arg("dof_func") = py::none(),
-    R"raw_string(
-HYPRE BoomerAMG Preconditioner for H1 scalar elliptic systems.
-
-Standalone BoomerAMG for use as h1_inv in Custom AMS preconditioner.
-With relax_type=6 (symmetric GS), the V-cycle is CG-compatible.
-
-Parameters:
-
-mat : SparseMatrix (real)
-  H1 system matrix.
-freedofs : BitArray, optional
-  Free DOFs mask.
-print_level : int
-  0=silent (default).
-coarsen_type : int
-  10=HMIS (default, good for 3D).
-relax_type : int
-  6=symmetric GS (default, CG-safe), 16=Chebyshev.
-agg_levels : int
-  Aggressive coarsening levels (default=1).
-strong_threshold : float
-  Strength threshold (default=0.25 for 3D).
-interp_type : int
-  Interpolation type (default=0, classical).
-max_levels : int
-  Maximum AMG levels (default=25).
-num_sweeps : int
-  Smoother sweeps per level (default=1).
-coarse_relax_type : int
-  Coarsest level smoother (default=9, Gaussian elimination).
-)raw_string");
-
-  // Complex HYPRE AMS with TaskManager Re/Im parallelism
-  m.def("ComplexHypreAMSPreconditioner",
+  m.def("ComplexCompactAMSPreconditioner",
     [](shared_ptr<BaseMatrix> a_real_mat,
        shared_ptr<BaseMatrix> grad_mat,
        py::object freedofs_obj,
@@ -490,15 +478,18 @@ coarse_relax_type : int
        py::list coord_z_list,
        int ndof_complex,
        int cycle_type,
-       int print_level) -> shared_ptr<BaseMatrix>
+       int print_level,
+       double correction_weight,
+       int subspace_solver,
+       int num_smooth) -> shared_ptr<ComplexCompactAMS>
     {
       auto sp_mat = dynamic_pointer_cast<SparseMatrix<double>>(a_real_mat);
       if (!sp_mat)
-        throw py::type_error("ComplexHypreAMSPreconditioner: a_real_mat must be real SparseMatrix<double>");
+        throw py::type_error("ComplexCompactAMSPreconditioner: a_real_mat must be real SparseMatrix<double>");
 
       auto sp_grad = dynamic_pointer_cast<SparseMatrix<double>>(grad_mat);
       if (!sp_grad)
-        throw py::type_error("ComplexHypreAMSPreconditioner: grad_mat must be real SparseMatrix<double>");
+        throw py::type_error("ComplexCompactAMSPreconditioner: grad_mat must be real SparseMatrix<double>");
 
       auto sp_freedofs = ExtractFreeDofs(freedofs_obj);
 
@@ -509,10 +500,17 @@ coarse_relax_type : int
         return v;
       };
 
-      return make_shared<ComplexHypreAMSPreconditioner>(
+      // Auto-derive ndof_complex from matrix if not specified (0 = auto)
+      int ndof = ndof_complex;
+      if (ndof <= 0) {
+        ndof = static_cast<int>(sp_mat->VHeight());
+      }
+
+      return make_shared<ComplexCompactAMS>(
           sp_mat, sp_grad, sp_freedofs,
           to_vec(coord_x_list), to_vec(coord_y_list), to_vec(coord_z_list),
-          ndof_complex, cycle_type, print_level);
+          ndof, cycle_type, print_level, correction_weight,
+          subspace_solver, num_smooth);
     },
     py::arg("a_real_mat"),
     py::arg("grad_mat"),
@@ -523,14 +521,18 @@ coarse_relax_type : int
     py::arg("ndof_complex") = 0,
     py::arg("cycle_type") = 1,
     py::arg("print_level") = 0,
+    py::arg("correction_weight") = 1.0,
+    py::arg("subspace_solver") = 0,
+    py::arg("num_smooth") = 1,
     R"raw_string(
-Complex HYPRE AMS preconditioner with TaskManager Re/Im parallelism.
+Complex Compact AMS preconditioner with TaskManager Re/Im parallelism.
 
 For complex eddy current problems (A = K + jw*sigma*M). Creates TWO
-independent HYPRE AMS solver instances and applies them to the real
+independent CompactAMS solver instances and applies them to the real
 and imaginary parts in parallel via NGSolve TaskManager.
 
-Use with BiCGStabSolver on the complex system matrix.
+No external dependency (pure C++ header-only).
+Use with COCRSolver (complex symmetric) or GMRESSolver (general).
 
 Parameters:
 
@@ -547,15 +549,12 @@ ndof_complex : int
 cycle_type : int
   AMS cycle type (1=01210, 7=0201020, default=1).
 print_level : int
-  HYPRE print level (0=silent, default=0).
+  Verbosity (0=silent, default=0).
 )raw_string");
+
+  m.def("has_compact_ams", []() { return true; },
+    "Returns True if Compact AMG/AMS support is available.");
 }
-#else
-inline void ExportHypreAMS(py::module& m) {
-  m.def("has_hypre", []() { return false; },
-    "Returns True if HYPRE support is available.");
-}
-#endif
 
 // ============================================================================
 // COCR solver (NGSolve BaseMatrix interface, accepts external preconditioner)
@@ -574,20 +573,23 @@ inline void ExportCOCRSolver(py::module& m) {
   m.def("COCRSolver",
     [](shared_ptr<BaseMatrix> mat,
        shared_ptr<BaseMatrix> pre,
+       py::object freedofs_obj,
        int maxiter,
        double tol,
        bool printrates) -> shared_ptr<BaseMatrix>
     {
+      auto sp_freedofs = ExtractFreeDofs(freedofs_obj);
       if (mat->IsComplex()) {
         return make_shared<COCRSolverNGS<Complex>>(
-            mat, pre, maxiter, tol, printrates);
+            mat, pre, sp_freedofs, maxiter, tol, printrates);
       } else {
         return make_shared<COCRSolverNGS<double>>(
-            mat, pre, maxiter, tol, printrates);
+            mat, pre, sp_freedofs, maxiter, tol, printrates);
       }
     },
     py::arg("mat"),
     py::arg("pre"),
+    py::arg("freedofs") = py::none(),
     py::arg("maxiter") = 500,
     py::arg("tol") = 1e-8,
     py::arg("printrates") = false,
@@ -599,7 +601,7 @@ Minimizes ||A r~||_2 for smoother convergence than COCG/CG.
 
 When to use COCRSolver vs SparseSolvSolver(method="COCR"):
   - COCRSolver(mat, pre): accepts any external BaseMatrix preconditioner
-    (e.g., IC, HYPRE AMS). Same interface as NGSolve CGSolver/BiCGStabSolver.
+    (e.g., IC, Compact AMS). Same interface as NGSolve CGSolver.
   - SparseSolvSolver(method="COCR"): uses internal IC preconditioner with
     auto-shift, ABMC ordering, divergence detection. Unified solver interface.
 
@@ -630,14 +632,78 @@ Reference: Sogabe & Zhang (2007), J. Comput. Appl. Math., 199(2), 297-303.
 // Public API: Single entry point for NGSolve integration
 // ============================================================================
 
+// ============================================================================
+// GMRES solver (NGSolve BaseMatrix interface, accepts external preconditioner)
+// ============================================================================
+
+inline void ExportGMRESSolver(py::module& m) {
+  py::class_<GMRESSolverNGS<double>, shared_ptr<GMRESSolverNGS<double>>, BaseMatrix>
+      (m, "GMRESSolverD")
+      .def_property_readonly("iterations", &GMRESSolverNGS<double>::GetIterations);
+
+  py::class_<GMRESSolverNGS<Complex>, shared_ptr<GMRESSolverNGS<Complex>>, BaseMatrix>
+      (m, "GMRESSolverC")
+      .def_property_readonly("iterations", &GMRESSolverNGS<Complex>::GetIterations);
+
+  m.def("GMRESSolver",
+    [](shared_ptr<BaseMatrix> mat,
+       shared_ptr<BaseMatrix> pre,
+       py::object freedofs_obj,
+       int maxiter,
+       double tol,
+       int restart,
+       bool printrates) -> shared_ptr<BaseMatrix>
+    {
+      auto freedofs = ExtractFreeDofs(freedofs_obj);
+      if (mat->IsComplex()) {
+        return make_shared<GMRESSolverNGS<Complex>>(
+            mat, pre, freedofs, maxiter, tol, restart, printrates);
+      } else {
+        return make_shared<GMRESSolverNGS<double>>(
+            mat, pre, freedofs, maxiter, tol, restart, printrates);
+      }
+    },
+    py::arg("mat"),
+    py::arg("pre"),
+    py::arg("freedofs") = py::none(),
+    py::arg("maxiter") = 500,
+    py::arg("tol") = 1e-8,
+    py::arg("restart") = 0,
+    py::arg("printrates") = false,
+    R"raw_string(
+Left-preconditioned GMRES solver for non-symmetric linear systems.
+
+1 SpMV + 1 preconditioner application per iteration.
+Optimal for AMS preconditioned eddy current problems.
+
+Parameters:
+
+mat : BaseMatrix
+  System matrix (real or complex, auto-detected).
+pre : BaseMatrix
+  Preconditioner (any BaseMatrix, need not be symmetric).
+freedofs : BitArray, optional
+  Free DOFs. Constrained DOFs are zeroed out during iteration.
+maxiter : int
+  Maximum iterations (default: 500).
+tol : float
+  Relative convergence tolerance (default: 1e-8).
+restart : int
+  Restart after this many iterations (0 = no restart, default: 0).
+printrates : bool
+  Print convergence info (default: False).
+)raw_string");
+}
+
 /// Register all SparseSolv Python bindings (type registration + factory functions)
 inline void ExportSparseSolvBindings(py::module& m) {
   ExportSparseSolvResult_impl(m);
   ExportSparseSolvTyped<double>(m, "D");
   ExportSparseSolvTyped<Complex>(m, "C");
   ExportSparseSolvFactories(m);
-  ExportHypreAMS(m);
+  ExportCompactAMS(m);
   ExportCOCRSolver(m);
+  ExportGMRESSolver(m);
 }
 
 } // namespace ngla

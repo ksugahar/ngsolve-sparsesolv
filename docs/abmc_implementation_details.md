@@ -1,499 +1,499 @@
-# 代数的ブロックマルチカラー (ABMC) オーダリングの実装詳細
+# Algebraic Block Multi-Color (ABMC) Ordering: Implementation Details
 
-このドキュメントでは、SparseSolv で使用されている代数的ブロックマルチカラー (ABMC) オーダリング手法の数学的背景と C++ 実装の詳細について説明します。ABMC は、不完全コレスキー (IC) 前処理における前進代入および後退代入ステップを並列化するための手法です。
+This document describes the mathematical background and C++ implementation details of the Algebraic Block Multi-Color (ABMC) ordering method used in SparseSolv. ABMC is a technique for parallelizing the forward and backward substitution steps in Incomplete Cholesky (IC) preconditioning.
 
-**実装ファイル:**
-- `core/abmc_ordering.hpp` — ABMCスケジュール構築 (BFS集約 + グラフ彩色)
-- `core/level_schedule.hpp` — レベルスケジューリング (比較対象)
-- `core/parallel.hpp` — 並列プリミティブ (`parallel_for`, `SpinBarrier`, `get_num_threads`)
-- `core/solver_config.hpp` — ABMCパラメータ設定
-- `preconditioners/ic_preconditioner.hpp` — 三角解法の実行、apply パス選択
+**Implementation files:**
+- `core/abmc_ordering.hpp` -- ABMC schedule construction (BFS aggregation + graph coloring)
+- `core/level_schedule.hpp` -- Level scheduling (comparison baseline)
+- `core/parallel.hpp` -- Parallel primitives (`parallel_for`, `SpinBarrier`, `get_num_threads`)
+- `core/solver_config.hpp` -- ABMC parameter configuration
+- `preconditioners/ic_preconditioner.hpp` -- Triangular solve execution, apply path selection
 
 ---
 
-## 1. 理論的背景
+## 1. Theoretical Background
 
-### 1.1 並列三角行列解法の課題
+### 1.1 Challenges of Parallel Triangular Solves
 
-ICCG のような反復ソルバーでは、前処理の適用に三角連立方程式を解く必要がある:
-- 前進代入: $L y = x$ を解く
-- 後退代入: $L^T z = y$ を解く
+In iterative solvers such as ICCG, applying the preconditioner requires solving triangular systems:
+- Forward substitution: solve $L y = x$
+- Backward substitution: solve $L^T z = y$
 
-$y_i$ の計算は $L_{ij} \neq 0$ となる $j < i$ のすべての $y_j$ に依存する。このデータ依存性が並列化のボトルネックとなる。
+Computing $y_i$ depends on all $y_j$ for which $L_{ij} \neq 0$ and $j < i$. This data dependency is the bottleneck for parallelization.
 
-### 1.2 レベルスケジューリング
+### 1.2 Level Scheduling
 
-依存関係を解消する基本手法。各行のレベル（依存深度）を計算し、同じレベルの行を並列に処理する:
+A basic technique for resolving dependencies. The level (dependency depth) of each row is computed, and rows at the same level are processed in parallel:
 
 ```
 level[i] = max(level[j] for j in L[i,:] where j < i) + 1
 ```
 
-**問題点**: FEM行列は帯域幅が広く依存チェーンが深い。レベル数が数百になり、各レベルの行数が少ないため並列効率が低い。
+**Problem**: FEM matrices have wide bandwidth and deep dependency chains. The number of levels reaches hundreds, and each level contains few rows, resulting in poor parallel efficiency.
 
-### 1.3 マルチカラーリング
+### 1.3 Multi-Coloring
 
-グラフ彩色により依存関係を断ち切るアプローチ。隣接する2つのノードが同じ色を持たないように色付けし、同じ色のノードを並列に処理する。しかし、古典的なポイントベースのマルチカラーリングは、色に基づいてメモリアクセスが飛躍するためキャッシュの局所性が悪い。
+An approach that breaks dependencies through graph coloring. Nodes are colored so that no two adjacent nodes share the same color, and nodes of the same color are processed in parallel. However, classical point-based multi-coloring leads to poor cache locality because memory accesses jump across distant locations based on color assignments.
 
-### 1.4 ABMC: ブロック + マルチカラー
+### 1.4 ABMC: Block + Multi-Color
 
-ABMC [Iwashita, Nakashima, Takahashi 2012] は2レベルの階層を導入して、並列性とキャッシュ局所性を両立する:
+ABMC [Iwashita, Nakashima, Takahashi 2012] introduces a two-level hierarchy to achieve both parallelism and cache locality:
 
-1. **ブロッキング**: 近傍の行をブロックにまとめる → キャッシュ局所性を維持
-2. **カラーリング**: ブロック間の依存関係を彩色 → 少ない同期回数で並列化
+1. **Blocking**: Group nearby rows into blocks -- maintains cache locality
+2. **Coloring**: Color inter-block dependencies -- enables parallelism with few synchronization points
 
-幾何学的情報を必要とせず、CSR形式の行列パターンのみで動作する。
+It requires no geometric information and operates solely on the CSR matrix pattern.
 
 ---
 
-## 2. 実装パイプライン
+## 2. Implementation Pipeline
 
-ABMC スケジュールは `ICPreconditioner::setup()` 中に構築される。`ABMCSchedule::build()` が4つのステージを順に実行する (`abmc_ordering.hpp`)。
+The ABMC schedule is constructed during `ICPreconditioner::setup()`. `ABMCSchedule::build()` executes four stages in sequence (`abmc_ordering.hpp`).
 
-### ステージ 1: 代数的ブロッキング (BFS集約)
+### Stage 1: Algebraic Blocking (BFS Aggregation)
 
-**関数**: `make_algebraic_blocks()`
+**Function**: `make_algebraic_blocks()`
 
-行列グラフ上のBFS (幅優先探索) により、近傍の行をブロックにまとめる。
-
-```
-入力: CSR行列 (row_ptr, col_idx), ブロックサイズ B
-出力: raw_block_list[b] = {元の行インデックスの集合}
-       block_assign[i] = 行iのブロックID
-
-1. block_assign を -1 (未割当) で初期化
-2. 未割当の最初の行を seed として新ブロック開始
-3. seed の隣接ノードを BFS キューに追加 (mark -2: キュー内)
-4. キューから取り出し、ブロックサイズ B に達するまで追加
-5. 残ったキューノードを -1 に戻す (次のブロック用)
-6. 全行割当済みまで繰り返し
-```
-
-**sentinel値の使い分け:**
-| 値 | 意味 |
-|----|------|
-| `-1` | 未割当 |
-| `-2` | BFSキュー内 (重複追加防止) |
-| `>= 0` | ブロックID割当済み |
-
-**計算量**: O(nnz) — 各非ゼロ要素を最大2回走査
-
-ブロックサイズ `B` (既定: 4, `SolverConfig::abmc_block_size`) は、ブロック内の行が逐次処理されるため、キャッシュ効率と並列粒度のバランスで決まる。
-
-### ステージ 2: ブロック隣接グラフの構築
-
-**関数**: `build_block_graph()`
-
-ブロック $A$ 内のいずれかの行が、ブロック $B$ 内のいずれかの行に非ゼロ接続を持つ場合、2つのブロックは隣接している。
+Groups nearby rows into blocks using BFS (breadth-first search) on the matrix graph.
 
 ```
-入力: raw_block_list, block_assign, CSR行列
-出力: ブロック隣接グラフ (blk_row_ptr, blk_col_idx) — CSR形式
+Input: CSR matrix (row_ptr, col_idx), block size B
+Output: raw_block_list[b] = {set of original row indices}
+        block_assign[i] = block ID for row i
 
-for 各ブロック bi:
-    for 各行 row ∈ bi:
-        for 各非ゼロ列 j ∈ row:
+1. Initialize block_assign to -1 (unassigned)
+2. Start a new block with the first unassigned row as seed
+3. Add seed's neighbors to the BFS queue (mark -2: in queue)
+4. Dequeue and add to block until block size B is reached
+5. Reset remaining queued nodes to -1 (for the next block)
+6. Repeat until all rows are assigned
+```
+
+**Sentinel value usage:**
+| Value | Meaning |
+|-------|---------|
+| `-1` | Unassigned |
+| `-2` | In BFS queue (prevents duplicate insertion) |
+| `>= 0` | Assigned to a block ID |
+
+**Complexity**: O(nnz) -- each nonzero element is traversed at most twice
+
+Block size `B` (default: 4, `SolverConfig::abmc_block_size`) balances cache efficiency and parallel granularity, since rows within a block are processed sequentially.
+
+### Stage 2: Block Adjacency Graph Construction
+
+**Function**: `build_block_graph()`
+
+Two blocks $A$ and $B$ are adjacent if any row in block $A$ has a nonzero connection to any row in block $B$.
+
+```
+Input: raw_block_list, block_assign, CSR matrix
+Output: Block adjacency graph (blk_row_ptr, blk_col_idx) -- CSR format
+
+for each block bi:
+    for each row row in bi:
+        for each nonzero column j in row:
             bj = block_assign[j]
             if bj != bi and last_seen[bj] != bi:
-                neighbors[bi] に bj を追加
-                last_seen[bj] = bi  ← 重複防止sentinel
+                add bj to neighbors[bi]
+                last_seen[bj] = bi  <-- deduplication sentinel
 ```
 
-**計算量**: O(nnz)。`last_seen` sentinel により、ブロック対あたり1回のみ追加。
+**Complexity**: O(nnz). The `last_seen` sentinel ensures each block pair is added only once.
 
-### ステージ 3: グリーディ彩色
+### Stage 3: Greedy Coloring
 
-**関数**: `color_graph()`
+**Function**: `color_graph()`
 
-ブロック隣接グラフを彩色する。下三角依存関係のあるブロック同士が異なる色を持つようにする。
+Colors the block adjacency graph so that blocks with lower-triangular dependencies have different colors.
 
-**2段階のアルゴリズム:**
+**Two-phase algorithm:**
 
 ```
-Phase 1: 最小色数の決定
-    num_colors = target_colors  (SolverConfig::abmc_num_colors, 既定: 4)
-    for 各ブロック i:
-        lower_count = |{j : j < i かつ (i,j) が隣接}|
+Phase 1: Determine minimum number of colors
+    num_colors = target_colors  (SolverConfig::abmc_num_colors, default: 4)
+    for each block i:
+        lower_count = |{j : j < i and (i,j) are adjacent}|
         num_colors = max(num_colors, lower_count + 1)
 
-Phase 2: Forbidden-Color-Set による貪欲彩色
-    forbidden[c] = i は「色 c がブロック i の下三角隣接ノードで使用中」を意味
-    for 各ブロック i (番号順):
-        下三角隣接ノード j < i の色を forbidden にマーク
-        最小の未使用色を選択
-        全色使用済みの場合: ++num_colors (新色を追加)
+Phase 2: Greedy coloring with forbidden-color-set
+    forbidden[c] = i means "color c is used by a lower-triangular neighbor of block i"
+    for each block i (in order):
+        Mark colors of lower-triangular neighbors j < i as forbidden
+        Select the smallest unused color
+        If all colors are used: ++num_colors (add a new color)
 ```
 
-**重要**: `target_colors` は**下限**であり保証値ではない。実際の色数は:
+**Important**: `target_colors` is a **lower bound**, not a guarantee. The actual number of colors is:
 
 ```
-num_colors >= max(target_colors, 1 + max_i |{j < i : (i,j) ∈ E}|)
+num_colors >= max(target_colors, 1 + max_i |{j < i : (i,j) in E}|)
 ```
 
-Phase 2 でさらに増加する可能性がある（Phase 1 は下三角次数のみで計算するが、彩色順序によっては追加の色が必要になる）。
+It may further increase in Phase 2 (Phase 1 computes based on lower-triangular degree only, but the coloring order may require additional colors).
 
-**計算量**: O(sum of degrees) — 各ブロックについて隣接ノードを1回走査
+**Complexity**: O(sum of degrees) -- each block's neighbors are scanned once
 
-### ステージ 4: 行レベルの順序構築
+### Stage 4: Row-Level Ordering Construction
 
-**関数**: `build_row_ordering()`
+**Function**: `build_row_ordering()`
 
-ブロック彩色結果から、行レベルのフラット配列を構築する。
+Constructs flat row-level arrays from the block coloring result.
 
 ```
-出力:
-  color_offsets[c] — 色c の開始ブロック位置 (CSR)
-  color_blocks[k] — global ブロックID
-  block_offsets[b] — ブロックb の開始行位置 (CSR)
-  ordering[old] = new — 元→新の置換
-  reverse_ordering[new] = old — 新→元の逆置換
+Output:
+  color_offsets[c] -- starting block position for color c (CSR)
+  color_blocks[k] -- global block ID
+  block_offsets[b] -- starting row position for block b (CSR)
+  ordering[old] = new -- old-to-new permutation
+  reverse_ordering[new] = old -- new-to-old inverse permutation
 
-走査順: 色0 → 色1 → ... → 色C-1
-  各色内: ブロック順
-    各ブロック内: 元のインデックスでソート (std::sort)
+Traversal order: color 0 -> color 1 -> ... -> color C-1
+  Within each color: block order
+    Within each block: sorted by original index (std::sort)
 ```
 
-**連番割り当て**: 新しい行インデックスは走査順に連番で割り当てられる。ブロック $b$ 内の行は `block_offsets[b]` から `block_offsets[b+1]-1` まで連続しており、別途の行インデックス配列は不要。三角解法では `for (i = block_offsets[blk]; i < block_offsets[blk+1]; ++i)` と直接ループできる。
+**Consecutive numbering**: New row indices are assigned consecutively in traversal order. Rows in block $b$ span from `block_offsets[b]` to `block_offsets[b+1]-1` contiguously, making a separate row-index array unnecessary. The triangular solve can directly loop as `for (i = block_offsets[blk]; i < block_offsets[blk+1]; ++i)`.
 
-ブロック内ソートの目的は、同一ブロック内の行が元の行列で近いインデックスを持つことで、前処理適用時のTLBミスを削減しキャッシュラインの利用率を向上させること。
+The purpose of intra-block sorting is to ensure that rows within the same block have nearby indices in the original matrix, reducing TLB misses and improving cache line utilization during preconditioner application.
 
 ---
 
-## 3. 並列三角解法のロジック
+## 3. Parallel Triangular Solve Logic
 
-### 3.1 データ構造
+### 3.1 Data Structures
 
-ABMC スケジュール後の三角解法に関わるデータ:
+Data involved in the triangular solve after ABMC scheduling:
 
-| データ | 空間 | 説明 |
-|--------|------|------|
-| `L_`, `Lt_`, `inv_diag_` | ABMC空間 | IC分解結果 (下/上三角因子, 逆対角) |
-| `abmc_x_perm_` | ABMC空間 | 入力ベクトル置換先 (size n) |
-| `abmc_y_perm_` | ABMC空間 | 出力ベクトル置換先 (size n) |
-| `work_temp_` | ABMC空間 | 中間結果ベクトル (size n, ABMC/level scheduling共有) |
-| `work_temp2_` | ABMC空間 | 第2中間結果 (対角スケーリング時のみ, size n) |
-| `composite_perm_` | 元→ABMC | 合成置換 |
-| `composite_scaling_` | 元空間 | 対角スケーリング係数 (元空間) |
+| Data | Space | Description |
+|------|-------|-------------|
+| `L_`, `Lt_`, `inv_diag_` | ABMC space | IC factorization results (lower/upper triangular factors, inverse diagonal) |
+| `abmc_x_perm_` | ABMC space | Input vector permutation buffer (size n) |
+| `abmc_y_perm_` | ABMC space | Output vector permutation buffer (size n) |
+| `work_temp_` | ABMC space | Intermediate result vector (size n, shared by ABMC/level scheduling) |
+| `work_temp2_` | ABMC space | Second intermediate result (diagonal scaling only, size n) |
+| `composite_perm_` | Original -> ABMC | Composite permutation |
+| `composite_scaling_` | Original space | Diagonal scaling coefficients (original space) |
 
-**ワークベクトルの共有**: `work_temp_` は ABMC パスとレベルスケジューリングパスで共有される。`setup()` 時に1回確保され、`apply()` 時のヒープ割り当てを排除している。
+**Work vector sharing**: `work_temp_` is shared between the ABMC path and the level scheduling path. It is allocated once during `setup()`, eliminating heap allocations during `apply()`.
 
-### 3.2 前進代入 ($L y = x$)
+### 3.2 Forward Substitution ($L y = x$)
 
-`forward_substitution_abmc()` — 3階層ループ:
+`forward_substitution_abmc()` -- 3-level loop:
 
 ```cpp
-for (色 c = 0; c < num_colors; ++c) {           // 逐次: 色間依存性
-    parallel_for(色c内のブロック数, [&](bidx) {    // 並列: 同色ブロックは独立
+for (color c = 0; c < num_colors; ++c) {            // Sequential: inter-color dependency
+    parallel_for(num blocks in color c, [&](bidx) {  // Parallel: same-color blocks are independent
         blk = color_blocks[blk_begin + bidx];
         row_begin = block_offsets[blk];
         row_end = block_offsets[blk + 1];
-        for (i = row_begin; i < row_end; ++i) {  // 逐次: ブロック内依存性
-            s = x[i];                             // ABMC空間の行インデックスを直接使用
-            for (k : L_の行iの非対角要素)
+        for (i = row_begin; i < row_end; ++i) {      // Sequential: intra-block dependency
+            s = x[i];                                 // Direct use of ABMC-space row index
+            for (k : off-diagonal entries in row i of L_)
                 s -= L_.values[k] * y[L_.col_idx[k]];
             y[i] = s / L_.values[diag];
         }
     });
-    // 暗黙の同期バリア (parallel_for完了 = 次の色に進める)
+    // Implicit synchronization barrier (parallel_for completion = proceed to next color)
 }
 ```
 
-`block_offsets` が連続インデックスを定義するため、ブロック内の行は `row_begin` から `row_end` まで直接ループできる。間接参照配列は不要。
+Since `block_offsets` defines contiguous index ranges, rows within a block can be looped directly from `row_begin` to `row_end`. No indirect-reference arrays are needed.
 
-### 3.3 後退代入 ($L^T z = D^{-1} y$)
+### 3.3 Backward Substitution ($L^T z = D^{-1} y$)
 
-`backward_substitution_abmc()` — 前進代入の逆順:
-- 色は C-1 → 0 の逆順
-- ブロック内の行も逆順 (`row_end → row_begin`)
-- $L^T$ (上三角) を使用
+`backward_substitution_abmc()` -- reverse order of forward substitution:
+- Colors are traversed in reverse order: C-1 -> 0
+- Rows within blocks are also traversed in reverse (`row_end -> row_begin`)
+- Uses $L^T$ (upper triangular)
 
 ```cpp
-for (c = nc; c-- > 0;) {                          // 色を逆順
-    parallel_for(色c内のブロック数, [&](bidx) {
-        for (i = row_end; i-- > row_begin;) {      // 行を逆順
+for (c = nc; c-- > 0;) {                              // Colors in reverse order
+    parallel_for(num blocks in color c, [&](bidx) {
+        for (i = row_end; i-- > row_begin;) {          // Rows in reverse order
             s = 0;
-            for (k : Lt_の行iの非対角要素)
+            for (k : off-diagonal entries in row i of Lt_)
                 s -= Lt_.values[k] * y[Lt_.col_idx[k]];
-            y[i] = s * inv_diag_[i] + x[i];       // D^{-1} 適用 + ソース加算
+            y[i] = s * inv_diag_[i] + x[i];           // Apply D^{-1} + add source
         }
     });
 }
 ```
 
-### 3.4 正確性の根拠
+### 3.4 Correctness Justification
 
-ABMC彩色により、同じ色のブロック間には下三角依存関係が存在しない。したがって:
-- 色 c のブロック内の前進代入は、色 < c の結果のみに依存
-- 色 c の各ブロックは互いに独立 → 並列実行可能
-- ブロック内は元の行列の依存関係を保持 → 逐次実行で正確
+ABMC coloring ensures that no lower-triangular dependencies exist between blocks of the same color. Therefore:
+- Forward substitution for blocks of color c depends only on results from colors < c
+- Blocks of the same color c are mutually independent -- can be executed in parallel
+- Intra-block dependencies from the original matrix are preserved -- sequential execution is correct
 
 ---
 
-## 4. apply パスの選択
+## 4. Apply Path Selection
 
-`ICPreconditioner` は3つの apply パスを提供する。入力/出力ベクトルの「空間」が異なる。
+`ICPreconditioner` provides three apply paths, differing in the "space" of input/output vectors.
 
-### 4.1 標準パス: `apply_abmc()` (推奨)
+### 4.1 Standard Path: `apply_abmc()` (Recommended)
 
-CG が元の空間で動作する場合。前処理適用時に置換を行う。
+Used when CG operates in the original space. Permutation is performed during preconditioner application.
 
 ```
-x (元空間) → composite_perm_ で置換 → abmc_x_perm_ (ABMC空間)
-  → forward_substitution_abmc → work_temp_
-  → backward_substitution_abmc → abmc_y_perm_ (ABMC空間)
-y (元空間) ← composite_perm_ で逆置換 ← abmc_y_perm_
+x (original space) -> permute with composite_perm_ -> abmc_x_perm_ (ABMC space)
+  -> forward_substitution_abmc -> work_temp_
+  -> backward_substitution_abmc -> abmc_y_perm_ (ABMC space)
+y (original space) <- inverse permute with composite_perm_ <- abmc_y_perm_
 ```
 
-対角スケーリング有効時は、置換と同時にスケーリングを適用:
+When diagonal scaling is enabled, scaling is applied simultaneously with permutation:
 ```cpp
 abmc_x_perm_[perm[i]] = x[i] * composite_scaling_[i];
 y[i] = abmc_y_perm_[perm[i]] * composite_scaling_[i];
 ```
 
-`composite_scaling_[i] = scaling_[composite_perm_[i]]` — 事前計算済み。
+`composite_scaling_[i] = scaling_[composite_perm_[i]]` -- precomputed.
 
-### 4.2 ABMC全空間パス: `apply_in_reordered_space()`
+### 4.2 ABMC Full-Space Path: `apply_in_reordered_space()`
 
-CG が ABMC 空間で動作する場合（`abmc_reorder_spmv=True` 時）。入出力が既にABMC空間のため置換不要。
+Used when CG operates in ABMC space (`abmc_reorder_spmv=True`). No permutation is needed since input/output are already in ABMC space.
 
-### 4.3 RCM+ABMC分離パス: `apply_rcm_abmc()`
+### 4.3 RCM+ABMC Separated Path: `apply_rcm_abmc()`
 
-CG が RCM 空間で動作する場合。RCM→ABMC の置換のみ必要:
+Used when CG operates in RCM space. Only RCM-to-ABMC permutation is needed:
 ```
-x (RCM空間) → composite_perm_rcm_ で置換 → ABMC空間
-  → 三角解法
-y (RCM空間) ← composite_perm_rcm_ で逆置換 ← ABMC空間
+x (RCM space) -> permute with composite_perm_rcm_ -> ABMC space
+  -> triangular solve
+y (RCM space) <- inverse permute with composite_perm_rcm_ <- ABMC space
 ```
 
-### 4.4 パス選択の判断基準
+### 4.4 Path Selection Criteria
 
-| パス | SpMV 行列 | 前処理 | 設定 |
-|------|----------|--------|------|
-| 標準 (4.1) | 元の行列 | 合成置換で ABMC 三角解法 | `use_abmc=True` |
-| RCM+ABMC (4.3) | RCM行列 | RCM→ABMC 置換 | `use_abmc=True, abmc_use_rcm=True` |
-| ABMC全空間 (4.2) | ABMC行列 | 置換なし | `abmc_reorder_spmv=True` |
+| Path | SpMV Matrix | Preconditioner | Configuration |
+|------|-------------|----------------|---------------|
+| Standard (4.1) | Original matrix | Composite permutation + ABMC triangular solve | `use_abmc=True` |
+| RCM+ABMC (4.3) | RCM matrix | RCM-to-ABMC permutation | `use_abmc=True, abmc_use_rcm=True` |
+| ABMC full-space (4.2) | ABMC matrix | No permutation | `abmc_reorder_spmv=True` |
 
-NGSolve統合 (`sparsesolv_ngsolve` モジュール) では、SpMV は NGSolve の `BaseMatrix::Mult` が担当するため、元の行列空間で動作する**標準パス (4.1)** が使用される。
+In the NGSolve integration (`sparsesolv_ngsolve` module), SpMV is handled by NGSolve's `BaseMatrix::Mult`, which operates in the original matrix space, so the **standard path (4.1)** is used.
 
 ---
 
-## 5. RCM との組み合わせ
+## 5. Combination with RCM
 
-### 5.1 合成置換 (Composite Permutation)
+### 5.1 Composite Permutation
 
-RCM+ABMC を使う場合、2段階の置換が必要:
+When using RCM+ABMC, a two-stage permutation is required:
 
 ```
-元の行 i → RCM空間: rcm_ordering_[i]
-RCM空間 → ABMC空間: abmc_ord[rcm_ordering_[i]]
+Original row i -> RCM space: rcm_ordering_[i]
+RCM space -> ABMC space: abmc_ord[rcm_ordering_[i]]
 ```
 
-毎回2段階の間接参照を行うのではなく、setup 時に合成置換を事前計算する:
+Rather than performing two levels of indirection each time, a composite permutation is precomputed during setup:
 
 ```cpp
 // build_composite_permutations()
-composite_perm_[i] = abmc_ord[rcm_ordering_[i]];  // 元 → ABMC (1段)
-composite_perm_rcm_ = abmc_ord;                    // RCM → ABMC (1段)
+composite_perm_[i] = abmc_ord[rcm_ordering_[i]];  // Original -> ABMC (single step)
+composite_perm_rcm_ = abmc_ord;                    // RCM -> ABMC (single step)
 ```
 
-### 5.2 行列コピーの流れ
+### 5.2 Matrix Copy Flow
 
-RCM+ABMC パスでは行列コピーが2回発生する:
+The RCM+ABMC path involves two matrix copies:
 
 ```
-元の行列 A
-  ↓ reorder_matrix_with_perm(A, rcm_ordering_)
-RCM行列 rcm_csr_
-  ↓ reorder_matrix(rcm_view)  [ABMC順序で並べ替え]
-ABMC行列 reordered_csr_
-  ↓ extract_lower_triangular()
-L_ (IC分解用)
+Original matrix A
+  | reorder_matrix_with_perm(A, rcm_ordering_)
+RCM matrix rcm_csr_
+  | reorder_matrix(rcm_view)  [reorder with ABMC ordering]
+ABMC matrix reordered_csr_
+  | extract_lower_triangular()
+L_ (for IC factorization)
 ```
 
-ABMC-only パスでは1回のみ (`A → reordered_csr_ → L_`)。
+The ABMC-only path requires only one copy (`A -> reordered_csr_ -> L_`).
 
-### 5.3 メモリ管理
+### 5.3 Memory Management
 
-factorization完了後、不要な行列コピーを解放:
+After factorization is complete, unnecessary matrix copies are freed:
 ```cpp
 if (!config_.abmc_reorder_spmv)
-    reordered_csr_.clear();  // SpMV は元の行列を使用
+    reordered_csr_.clear();  // SpMV uses the original matrix
 if (!config_.abmc_use_rcm)
     rcm_csr_.clear();
 ```
 
 ---
 
-## 6. レベルスケジューリングとの比較
+## 6. Comparison with Level Scheduling
 
-### 6.1 並列化手法の違い
+### 6.1 Differences in Parallelization Approaches
 
-SparseSolv は2つの並列三角解法を提供する。ABMCを使わない場合、**persistent parallel region 付きレベルスケジューリング**が使用される。
+SparseSolv provides two parallel triangular solve methods. When ABMC is not used, **level scheduling with a persistent parallel region** is employed.
 
-| 特性 | レベルスケジューリング (persistent) | ABMC |
-|------|-----------------------------------|------|
-| 並列粒度 | 行単位 | ブロック単位 |
-| 同期回数 | レベル数 (数百) | 色数 (4〜数十) |
-| 同期方式 | SpinBarrier (1回の parallel_for 内) | parallel_for 呼び出し (色ごと) |
-| FEM での並列度 | 低い (深い依存チェーン) | 高い |
-| セットアップ | O(nnz) — レベル計算のみ | O(nnz) — BFS + 彩色 + 行列並べ替え |
-| 追加メモリ | レベル配列のみ | ワークベクトル 2×n + 行列コピー |
-| apply時の割り当て | なし (事前確保済み) | なし (事前確保済み) |
+| Characteristic | Level Scheduling (persistent) | ABMC |
+|---------------|-------------------------------|------|
+| Parallel granularity | Row-level | Block-level |
+| Synchronization count | Number of levels (hundreds) | Number of colors (4 to tens) |
+| Synchronization mechanism | SpinBarrier (within a single parallel_for) | parallel_for calls (per color) |
+| Parallelism for FEM | Low (deep dependency chains) | High |
+| Setup cost | O(nnz) -- level computation only | O(nnz) -- BFS + coloring + matrix reordering |
+| Additional memory | Level arrays only | Work vectors 2*n + matrix copy |
+| Allocation during apply | None (pre-allocated) | None (pre-allocated) |
 
-**追加メモリの内訳 (ABMC パス)**:
-- `abmc_x_perm_` (n), `abmc_y_perm_` (n) — ABMC固有
-- `work_temp_` (n), `work_temp2_` (n) — 両パス共有
-- `composite_perm_` (n), `composite_scaling_` (n) — 置換/スケーリング
-- `reordered_csr_` — 行列並べ替え (factorization後に解放、`abmc_reorder_spmv=false` の場合)
+**Additional memory breakdown (ABMC path)**:
+- `abmc_x_perm_` (n), `abmc_y_perm_` (n) -- ABMC-specific
+- `work_temp_` (n), `work_temp2_` (n) -- shared by both paths
+- `composite_perm_` (n), `composite_scaling_` (n) -- permutation/scaling
+- `reordered_csr_` -- reordered matrix (freed after factorization when `abmc_reorder_spmv=false`)
 
 ### 6.2 Persistent Parallel Region
 
-レベルスケジューリングの素朴な実装では、各レベルで `parallel_for` を呼び出す。レベル数が数百の場合、スレッドプール起動のオーバーヘッドが問題となる。
+A naive implementation of level scheduling calls `parallel_for` for each level. When the number of levels reaches hundreds, the overhead of launching the thread pool becomes problematic.
 
-`forward_substitution_persistent()` は、単一の `parallel_for(nthreads, ...)` 内で全レベルを処理し、レベル間は SpinBarrier で同期する:
+`forward_substitution_persistent()` processes all levels within a single `parallel_for(nthreads, ...)`, synchronizing between levels with SpinBarrier:
 
 ```cpp
 parallel_for(nthreads, [&](index_t thread_id) {
     for (int lev = 0; lev < num_levels; ++lev) {
-        // 各スレッドが担当範囲の行を処理
+        // Each thread processes its assigned range of rows
         const index_t my_start = level_size * thread_id / nthreads;
         const index_t my_end = level_size * (thread_id + 1) / nthreads;
         for (idx = my_start; idx < my_end; ++idx) { ... }
-        barrier.wait();  // レベル間同期
+        barrier.wait();  // Inter-level synchronization
     }
 });
 ```
 
-スレッド数 > 1 の場合に自動的にこのパスが選択される（`get_num_threads() > 1`）。
+This path is automatically selected when the thread count is greater than 1 (`get_num_threads() > 1`).
 
-### 6.3 SpinBarrier の実装
+### 6.3 SpinBarrier Implementation
 
-`SpinBarrier` (`parallel.hpp`) はセンスリバーシングアルゴリズムを使用する:
+`SpinBarrier` (`parallel.hpp`) uses a sense-reversing algorithm:
 
 ```cpp
 class SpinBarrier {
-    alignas(64) std::atomic<int> count_;   // 到着スレッド数
-    alignas(64) std::atomic<int> sense_;   // 現在の世代番号
+    alignas(64) std::atomic<int> count_;   // Number of arrived threads
+    alignas(64) std::atomic<int> sense_;   // Current generation number
     int num_threads_;
 public:
     void wait() {
         int my_sense = sense_.load(acquire);
         if (count_.fetch_add(1, acq_rel) == num_threads_ - 1) {
-            // 最後のスレッド: カウンタリセット + センス反転
+            // Last thread: reset counter + flip sense
             count_.store(0, relaxed);
             sense_.fetch_add(1, release);
         } else {
-            // スピンウェイト (4096回後に yield)
+            // Spin-wait (yield after 4096 iterations)
             while (sense_.load(acquire) == my_sense) { ... }
         }
     }
 };
 ```
 
-**キャッシュライン分離**: `count_` と `sense_` は `alignas(64)` でそれぞれ独立したキャッシュラインに配置し、フォルスシェアリングを防止する。
+**Cache line separation**: `count_` and `sense_` are placed on separate cache lines using `alignas(64)` to prevent false sharing.
 
-**スピン→yield戦略**: 4096回のスピン後に `std::this_thread::yield()` を呼び出す。短い同期ではスピンで待ち、長い同期ではCPUを譲る。
+**Spin-to-yield strategy**: After 4096 spin iterations, `std::this_thread::yield()` is called. This spins for short synchronizations and yields the CPU for longer ones.
 
 ---
 
-## 7. 性能特性
+## 7. Performance Characteristics
 
-### 7.1 ベンチマーク条件
+### 7.1 Benchmark Conditions
 
-- 8スレッド (NGSolve TaskManager)
-- 3D HCurl curl-curl 問題 (order=2, `nograds=True`)
-- 単位立方体メッシュ、shifted-ICCG (`shift=1.05, auto_shift=True, diagonal_scaling=True`)
-- ベースライン: persistent parallel region 付きレベルスケジューリング
-- 3回実行の最小値
+- 8 threads (NGSolve TaskManager)
+- 3D HCurl curl-curl problem (order=2, `nograds=True`)
+- Unit cube mesh, shifted-ICCG (`shift=1.05, auto_shift=True, diagonal_scaling=True`)
+- Baseline: level scheduling with persistent parallel region
+- Minimum of 3 runs
 
-### 7.2 スケーリング結果
+### 7.2 Scaling Results
 
-| DOFs | Level Sched. | ABMC (best) | Speedup | 反復数 |
-|------|-------------|-------------|---------|--------|
+| DOFs | Level Sched. | ABMC (best) | Speedup | Iterations |
+|------|-------------|-------------|---------|------------|
 | 11K | 0.044s | 0.051s | **0.86x** | 31 |
 | 27K | 0.158s | 0.154s | **1.02x** | 39 |
 | 82K | 0.763s | 0.650s | **1.17x** | 59 |
 | 186K | 2.505s | 1.962s | **1.28x** | 79 |
 
-### 7.3 NB02 トロイダルコイルとの比較
+### 7.3 Comparison on NB02 Toroidal Coil
 
-[02_performance_comparison.ipynb](02_performance_comparison.ipynb) のトロイダルコイル問題 (148K DOFs) では:
+On the toroidal coil problem from [02_performance_comparison.ipynb](02_performance_comparison.ipynb) (148K DOFs):
 
-| ソルバー | 反復数 | Wall Time | Speedup |
-|---------|--------|-----------|---------|
+| Solver | Iterations | Wall Time | Speedup |
+|--------|-----------|-----------|---------|
 | ICCG (level sched.) | 463 | 10.0s | 1.0x |
-| ICCG + ABMC (8色) | 415 | 6.0s | **1.7x** |
+| ICCG + ABMC (8 colors) | 415 | 6.0s | **1.7x** |
 
-単位立方体 (186K DOFs) では 1.28x、トロイダルコイル (148K DOFs) では 1.7x。差の要因:
-- **反復数**: 463 vs 79。反復数が多いほど三角解法の時間比率が大きくなり、ABMC の効果が顕著
-- **行列構造**: トロイダルコイルは帯域幅が大きく、レベルスケジューリングのレベル数がより多い → 同期オーバーヘッドが大きい → ABMC の優位性が増す
+On the unit cube (186K DOFs) the speedup is 1.28x, while on the toroidal coil (148K DOFs) it is 1.7x. The factors behind this difference are:
+- **Iteration count**: 463 vs 79. A higher iteration count increases the time fraction spent in triangular solves, making ABMC's effect more pronounced
+- **Matrix structure**: The toroidal coil has wider bandwidth, leading to more levels in level scheduling -- greater synchronization overhead -- greater advantage for ABMC
 
-### 7.4 損益分岐点
+### 7.4 Break-Even Point
 
-ABMCには以下のオーバーヘッドがある:
-1. **セットアップ**: BFS集約、ブロックグラフ構築、彩色、行列並べ替え
-2. **apply時**: ベクトル置換 (2回の `parallel_for` による scatter/gather)
+ABMC has the following overheads:
+1. **Setup**: BFS aggregation, block graph construction, coloring, matrix reordering
+2. **Per-apply**: Vector permutation (2 `parallel_for` calls for scatter/gather)
 
-これらのオーバーヘッドが三角解法の高速化を上回る領域では、ABMCは逆効果になる。
+In regimes where these overheads exceed the speedup from faster triangular solves, ABMC becomes counterproductive.
 
-**損益分岐点: 約 25K〜30K DOFs** (8スレッド、単位立方体、HCurl order 2)
+**Break-even point: approximately 25K--30K DOFs** (8 threads, unit cube, HCurl order 2)
 
-- DOFs < 25K: レベルスケジューリングのほうが高速
-- DOFs > 30K: ABMC が有利。問題サイズに比例して効果増大
+- DOFs < 25K: Level scheduling is faster
+- DOFs > 30K: ABMC is advantageous. The benefit grows proportionally with problem size
 
-### 7.5 効果を左右する要因
+### 7.5 Factors Affecting Effectiveness
 
-| 要因 | ABMC に有利 | ABMC に不利 |
-|------|------------|------------|
-| 問題サイズ | 大規模 (>30K DOFs) | 小規模 (<25K DOFs) |
-| 反復数 | 多い (>100) | 少ない (<30) |
-| 行列帯域幅 | 広い (深い依存チェーン) | 狭い |
-| ABMC色数 | 少ない (4〜8) | 多い (>20) |
-| スレッド数 | 多い (≥4) | 少ない (1〜2) |
-
----
-
-## 8. 設定パラメータ
-
-`SolverConfig` で制御される ABMC 関連パラメータ:
-
-| パラメータ | 型 | 既定値 | 説明 |
-|-----------|-----|--------|------|
-| `use_abmc` | bool | false | ABMC 有効化 |
-| `abmc_block_size` | int | 4 | BFS集約のブロックサイズ (行/ブロック) |
-| `abmc_num_colors` | int | 4 | 彩色の目標色数 (下限、自動拡張あり) |
-| `abmc_reorder_spmv` | bool | false | CG を ABMC 空間で実行 (SpMV も並べ替え) |
-| `abmc_use_rcm` | bool | false | ABMC前に RCM 帯域幅縮小を適用 |
-
-**推奨設定**: `use_abmc=True` のみ (他はデフォルト) で十分。
-
-- `abmc_block_size`: 4〜16 で性能差は数%以内
-- `abmc_num_colors`: ほぼ常に自動拡張されるため、指定値の影響は小さい
-- `abmc_reorder_spmv`: FEMメッシュ順序のキャッシュ局所性を保つため、通常は false
-- `abmc_use_rcm`: 追加の行列コピーとセットアップコストがかかるため、通常は false
+| Factor | Favorable for ABMC | Unfavorable for ABMC |
+|--------|-------------------|---------------------|
+| Problem size | Large (>30K DOFs) | Small (<25K DOFs) |
+| Iteration count | High (>100) | Low (<30) |
+| Matrix bandwidth | Wide (deep dependency chains) | Narrow |
+| ABMC color count | Few (4--8) | Many (>20) |
+| Thread count | Many (>=4) | Few (1--2) |
 
 ---
 
-## 9. ABMCSchedule のデータ構造
+## 8. Configuration Parameters
 
-`ABMCSchedule` 構造体 (`abmc_ordering.hpp`) のメンバ:
+ABMC-related parameters controlled by `SolverConfig`:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `use_abmc` | bool | false | Enable ABMC |
+| `abmc_block_size` | int | 4 | Block size for BFS aggregation (rows/block) |
+| `abmc_num_colors` | int | 4 | Target number of colors (lower bound, auto-expanded) |
+| `abmc_reorder_spmv` | bool | false | Run CG in ABMC space (SpMV also reordered) |
+| `abmc_use_rcm` | bool | false | Apply RCM bandwidth reduction before ABMC |
+
+**Recommended settings**: `use_abmc=True` alone (with other defaults) is sufficient.
+
+- `abmc_block_size`: Performance varies by only a few percent across values of 4--16
+- `abmc_num_colors`: Almost always auto-expanded, so the specified value has little impact
+- `abmc_reorder_spmv`: Usually false to preserve the cache locality of FEM mesh ordering
+- `abmc_use_rcm`: Usually false due to the additional matrix copy and setup cost
+
+---
+
+## 9. ABMCSchedule Data Structure
+
+Members of the `ABMCSchedule` struct (`abmc_ordering.hpp`):
 
 ```cpp
 struct ABMCSchedule {
-    // 色 → ブロック (CSR形式)
+    // Color -> blocks (CSR format)
     std::vector<index_t> color_offsets;    // size: num_colors + 1
-    std::vector<index_t> color_blocks;     // 各色のブロックIDリスト
+    std::vector<index_t> color_blocks;     // List of block IDs per color
 
-    // ブロック → 行 (CSR形式, 連番のため実質オフセットのみ)
+    // Block -> rows (CSR format, effectively offsets only due to consecutive numbering)
     std::vector<index_t> block_offsets;    // size: num_blocks + 1
 
-    // 行の置換
+    // Row permutation
     std::vector<index_t> ordering;         // ordering[old_row] = new_row
     std::vector<index_t> reverse_ordering; // reverse_ordering[new_row] = old_row
 };
 ```
 
-**三角解法での走査パターン**:
+**Traversal pattern in triangular solve**:
 ```
 for c = 0 to num_colors - 1:
     blk_begin = color_offsets[c]
@@ -501,22 +501,22 @@ for c = 0 to num_colors - 1:
     parallel_for(blk_begin .. blk_end):
         blk = color_blocks[bidx]
         for i = block_offsets[blk] to block_offsets[blk+1] - 1:
-            // ABMC空間の行 i を処理
+            // Process row i in ABMC space
 ```
 
-**メモリ効率**: `block_offsets` が連続行範囲を定義するため、行→ブロック対応の配列は不要。ブロック $b$ の行は `[block_offsets[b], block_offsets[b+1])` で完全に決まる。
+**Memory efficiency**: Since `block_offsets` defines contiguous row ranges, no row-to-block mapping array is needed. The rows of block $b$ are fully determined by `[block_offsets[b], block_offsets[b+1])`.
 
 ---
 
-## 10. CGカーネル融合 (v2.3.0)
+## 10. CG Kernel Fusion (v2.3.0)
 
-### 10.1 動機
+### 10.1 Motivation
 
-CG反復はメモリ帯域律速 (算術強度 ~0.33 FLOP/byte) であり、カーネル間のベクトル再読込がボトルネックとなる。融合前のCG反復は7回のカーネル起動を行い、合計 nnz + 12n read, 4n write のメモリトラフィックが発生する (IC apply除く)。
+CG iterations are memory-bandwidth bound (arithmetic intensity ~0.33 FLOP/byte), and re-reading vectors between kernels is the bottleneck. Before fusion, a CG iteration involves 7 kernel launches with a total memory traffic of nnz + 12n reads and 4n writes (excluding IC apply).
 
-### 10.2 融合カーネル
+### 10.2 Fused Kernels
 
-**Phase 1: SpMV + dot融合** — `cg_solver.hpp`
+**Phase 1: SpMV + dot fusion** -- `cg_solver.hpp`
 
 ```cpp
 Scalar pAp = parallel_reduce_sum<Scalar>(n, [&](index_t i) -> Scalar {
@@ -524,13 +524,13 @@ Scalar pAp = parallel_reduce_sum<Scalar>(n, [&](index_t i) -> Scalar {
     for (index_t k = A_rowptr[i]; k < A_rowptr[i + 1]; ++k)
         s += A_vals[k] * p[A_colidx[k]];
     Ap[i] = s;
-    return p[i] * s;  // dot(p, Ap) の部分和
+    return p[i] * s;  // Partial sum for dot(p, Ap)
 });
 ```
 
-SpMV (`Ap = A*p`) と内積 (`pAp = dot(p, Ap)`) を1パスで計算。p[] と Ap[] の再読込 (2n read) を排除。
+Computes SpMV (`Ap = A*p`) and the inner product (`pAp = dot(p, Ap)`) in a single pass. Eliminates re-reading of p[] and Ap[] (2n reads).
 
-**Phase 2: AXPY + norm融合**
+**Phase 2: AXPY + norm fusion**
 
 ```cpp
 double norm_r_sq = parallel_reduce_sum<double>(n, [&](index_t i) -> double {
@@ -540,12 +540,12 @@ double norm_r_sq = parallel_reduce_sum<double>(n, [&](index_t i) -> double {
 });
 ```
 
-ベクトル更新 (`x += alpha*p`, `r -= alpha*Ap`) と残差ノルム計算を1パスで実行。r[] の再読込 (n read) を排除。
+Executes vector updates (`x += alpha*p`, `r -= alpha*Ap`) and residual norm computation in a single pass. Eliminates re-reading of r[] (n reads).
 
-**Phase 3: 前処理適用 + dot(r, z) 融合** — `preconditioner.hpp`, `ic_preconditioner.hpp`
+**Phase 3: Preconditioner apply + dot(r, z) fusion** -- `preconditioner.hpp`, `ic_preconditioner.hpp`
 
 ```cpp
-// Preconditioner::apply_fused_dot() — 基底クラスの仮想メソッド
+// Preconditioner::apply_fused_dot() -- virtual method in the base class
 Scalar apply_fused_dot(const Scalar* r_for_dot, const Scalar* x,
                        Scalar* y, index_t size, bool conjugate) const {
     apply(x, y, size);
@@ -556,39 +556,39 @@ Scalar apply_fused_dot(const Scalar* r_for_dot, const Scalar* x,
 }
 ```
 
-IC前処理の各パスで `apply_fused_dot()` をオーバーライドし、後退代入の出力フェーズで `dot(r, z)` を同時計算する。ABMC空間パス (Path 1) では持続的並列領域内でスレッドローカルの部分和を蓄積し、最後にシリアルリダクションする。
+Each IC preconditioning path overrides `apply_fused_dot()` to compute `dot(r, z)` simultaneously during the output phase of backward substitution. In the ABMC-space path (Path 1), thread-local partial sums are accumulated within the persistent parallel region and reduced serially at the end.
 
-**効果**: 反復あたり7カーネル → 4カーネル、メモリトラフィック約25%削減。
+**Effect**: 7 kernels per iteration reduced to 4, with approximately 25% reduction in memory traffic.
 
-### 10.3 ABMC並列auto_shift
+### 10.3 ABMC Parallel auto_shift
 
-v2.3.0以前はauto_shift有効時にABMC並列IC分解が使えず、逐次パスにフォールバックしていた。v2.3.0でアトミックフラグ (`std::atomic<bool>`) によるリスタート機構を導入:
+Before v2.3.0, ABMC parallel IC factorization was unavailable when auto_shift was enabled, falling back to the sequential path. In v2.3.0, an atomic flag (`std::atomic<bool>`) restart mechanism was introduced:
 
-1. ABMC色ごとの並列IC分解を実行
-2. いずれかのスレッドで対角breakdownを検出 → アトミックフラグをセット
-3. 色ループ終了時にフラグを確認 → シフト増加 (指数バックオフ) → 元の値から全体リスタート
+1. Execute ABMC color-parallel IC factorization
+2. If any thread detects a diagonal breakdown, set the atomic flag
+3. At the end of the color loop, check the flag -- increase the shift (exponential backoff) -- restart from scratch with the original values
 
-シフト増加は指数バックオフ (`increment *= 2`) を採用し、少ないリスタート回数で適切なシフト値に到達する。
-ABMC順序はパターンベースのため、リスタート時に再計算は不要。
+The shift increase uses exponential backoff (`increment *= 2`), reaching an appropriate shift value with few restarts.
+Since the ABMC ordering is pattern-based, no recomputation is needed upon restart.
 
-**効果**: Hiruma渦電流問題 (HCurl p=1) で並列スケーリングが 1.5x → 2.6x に改善 (8コア)。
+**Effect**: For the Hiruma eddy current problem (HCurl p=1), parallel scaling improved from 1.5x to 2.6x (8 cores).
 
-### 10.4 ABMC空間CG (`abmc_reorder_spmv=True`)
+### 10.4 ABMC-Space CG (`abmc_reorder_spmv=True`)
 
-CGを完全にABMC並べ替え空間で実行するモード。SpMV、IC apply、ベクトル演算のすべてがABMC空間で行われる。
+A mode that runs CG entirely in ABMC-reordered space. SpMV, IC apply, and all vector operations are performed in ABMC space.
 
-利点:
-- IC apply時の入出力ベクトル置換 (scatter/gather) が不要
-- SpMVのキャッシュ局所性がABMCブロック構造と一致
-- パラメータ `abmc_reorder_spmv=True` で有効化
+Advantages:
+- Eliminates input/output vector permutation (scatter/gather) during IC apply
+- SpMV cache locality aligns with the ABMC block structure
+- Enabled with parameter `abmc_reorder_spmv=True`
 
-**効果**: Hiruma問題で 2.7x → 2.89x (8コア)。
+**Effect**: 2.7x to 2.89x on the Hiruma problem (8 cores).
 
-### 10.5 持続的並列領域 + dot(r,z)融合 (`apply_fused_dot`)
+### 10.5 Persistent Parallel Region + dot(r,z) Fusion (`apply_fused_dot`)
 
-`apply_in_reordered_space()` (ABMC空間CGパス) は、各色ごとに `forward_substitution_abmc()` / `backward_substitution_abmc()` を呼び出し、合計 2*nc 回の `parallel_for` ディスパッチを行っていた。これを `apply_abmc()` と同様の持続的並列領域 (1 dispatch + 2*nc barriers) に変換し、さらに後退代入の最終出力で `dot(r, z)` を同時計算する。
+`apply_in_reordered_space()` (ABMC-space CG path) originally called `forward_substitution_abmc()` / `backward_substitution_abmc()` for each color, resulting in a total of 2*nc `parallel_for` dispatches. This was converted to a persistent parallel region (1 dispatch + 2*nc barriers), similar to `apply_abmc()`, and additionally computes `dot(r, z)` during the final output of backward substitution.
 
-`apply_in_reordered_space_fused_dot()` の構造:
+Structure of `apply_in_reordered_space_fused_dot()`:
 
 ```cpp
 parallel_for(nthreads, [&](index_t tid) {
@@ -609,66 +609,66 @@ parallel_for(nthreads, [&](index_t tid) {
 // Serial reduction of partial sums
 ```
 
-全3パスに対応:
+Supported across all 3 paths:
 - **Path 1** (`abmc_reorder_spmv=True`): `apply_in_reordered_space_fused_dot()`
 - **Path 2** (RCM+ABMC): `apply_rcm_abmc_fused_dot()`
-- **Path 3** (標準ABMC): `apply_abmc_fused_dot()` — Phase 4 (出力置換) でdot融合
+- **Path 3** (Standard ABMC): `apply_abmc_fused_dot()` -- dot fusion during Phase 4 (output permutation)
 
-**効果**: Hiruma問題で 2.89x → 3.14x (8コア, 理論最大4xの79%)。
-
----
-
-## 11. 既知の制限
-
-### 11.1 色数の非予測性
-
-`target_colors` はグリーディ彩色の下限であり、ブロック間の依存関係が密な場合に自動拡張される。複雑なメッシュ（ヘリカルコイル等）では指定値を大幅に超える可能性がある。
-
-**改善候補**: 実際の色数をログ出力して、ユーザーが確認できるようにする。
-
-### 11.2 ブロックサイズの自動調整
-
-現在 `block_size` (既定: 4) はユーザー指定の固定値。行列構造に応じた自動調整は未実装。
-
-ベンチマーク結果ではブロックサイズ 4〜16 の差は小さい（数%以内）。
-
-### 11.3 RCM事前並べ替えの限定的効果
-
-RCM は帯域幅縮小によりABMC彩色の色数を減らす可能性があるが、追加の行列コピーコストとセットアップ時間を要する。現在のベンチマークでは `abmc_use_rcm=False` と `True` の差は誤差範囲内であり、デフォルトは無効。
+**Effect**: 2.89x to 3.14x on the Hiruma problem (8 cores, 79% of the theoretical maximum of 4x).
 
 ---
 
-## 12. 改善履歴
+## 11. Known Limitations
 
-このセクションでは、実装レビューに基づいて実施した改善を記録する。
+### 11.1 Unpredictability of Color Count
 
-### 12.1 `block_rows` 配列の除去
+`target_colors` is a lower bound for greedy coloring, and it is auto-expanded when inter-block dependencies are dense. For complex meshes (e.g., helical coils), the actual count may significantly exceed the specified value.
 
-**課題**: `build_row_ordering()` で構築していた `block_rows[ridx]` は常に `ridx` に等しかった（新インデックスが連番で割り当てられるため、恒等写像）。三角解法で `i = block_rows[ridx]` とする代わりに `i = ridx` と書ける。
+**Potential improvement**: Log the actual color count so users can verify it.
 
-**対応**: `ABMCSchedule` から `block_rows` メンバを削除。三角解法ループを `for (i = row_begin; i < row_end; ++i)` に簡素化。O(n) のメモリ削減。
+### 11.2 No Automatic Block Size Tuning
 
-### 12.2 ワークベクトルの事前確保と共有
+Currently, `block_size` (default: 4) is a user-specified fixed value. Automatic tuning based on matrix structure is not implemented.
 
-**課題**: レベルスケジューリングパスの `apply_level_schedule()` は毎回 `std::vector<Scalar> temp(size)` をヒープ割り当てしていた。ABMCパスは `setup()` 時に事前確保済みだったが、別の変数名 (`abmc_temp_`) で管理されていた。
+Benchmark results show that the difference across block sizes 4--16 is small (within a few percent).
 
-**対応**: `work_temp_` (と `work_temp2_`) を両パス共有のメンバ変数に統一。`setup()` 時に1回確保し、`apply()` 時のヒープ割り当てを完全に排除。
+### 11.3 Limited Effectiveness of RCM Pre-Reordering
 
-### 12.3 `build_row_ordering` の未使用パラメータ除去
-
-**課題**: `color_graph()` の出力パラメータと `build_row_ordering()` のパラメータに未使用のものがあった。
-
-**対応**: `color_graph()` から不要な出力パラメータを削除。`build_row_ordering()` のシグネチャを簡素化。
+RCM may reduce the ABMC color count through bandwidth reduction, but it incurs additional matrix copy costs and setup time. In current benchmarks, the difference between `abmc_use_rcm=False` and `True` is within the margin of error, so the default is disabled.
 
 ---
 
-## 謝辞
+## 12. Improvement History
 
-ABMC オーダリングの実装は、圓谷友紀氏（福岡大学）から提供されたコード [JP-MARs/SparseSolv](https://github.com/JP-MARs/SparseSolv) に基づいている。このコードは岩下武史氏（京都大学）の研究グループにおける ABMC 手法 [1] および SGS-MRTR 前処理の研究成果を実装したものであり、本リポジトリではヘッダオンリー構成への再構成、NGSolve 連携、auto-shift IC、BDDC 前処理の追加など、独自の拡張を施している。
+This section records improvements made based on implementation review.
+
+### 12.1 Removal of `block_rows` Array
+
+**Issue**: The `block_rows[ridx]` array constructed in `build_row_ordering()` was always equal to `ridx` (since new indices are assigned consecutively, it was the identity mapping). Instead of `i = block_rows[ridx]`, one could simply write `i = ridx`.
+
+**Resolution**: Removed the `block_rows` member from `ABMCSchedule`. Simplified the triangular solve loop to `for (i = row_begin; i < row_end; ++i)`. O(n) memory reduction.
+
+### 12.2 Pre-Allocation and Sharing of Work Vectors
+
+**Issue**: The level scheduling path's `apply_level_schedule()` heap-allocated `std::vector<Scalar> temp(size)` on every call. The ABMC path pre-allocated during `setup()`, but used a different variable name (`abmc_temp_`).
+
+**Resolution**: Unified `work_temp_` (and `work_temp2_`) as shared member variables for both paths. Allocated once during `setup()`, completely eliminating heap allocations during `apply()`.
+
+### 12.3 Removal of Unused Parameters from `build_row_ordering`
+
+**Issue**: There were unused output parameters in `color_graph()` and unused parameters in `build_row_ordering()`.
+
+**Resolution**: Removed unnecessary output parameters from `color_graph()`. Simplified the signature of `build_row_ordering()`.
 
 ---
 
-## 参考文献
+## Acknowledgements
+
+The ABMC ordering implementation is based on code provided by Yuki Tsurutani (Fukuoka University) at [JP-MARs/SparseSolv](https://github.com/JP-MARs/SparseSolv). This code implements the ABMC method [1] and SGS-MRTR preconditioning research from the group of Takeshi Iwashita (Kyoto University). This repository adds its own extensions including header-only restructuring, NGSolve integration, auto-shift IC, and BDDC preconditioning.
+
+---
+
+## References
 
 1. T. Iwashita, H. Nakashima, Y. Takahashi,
    "Algebraic Block Multi-Color Ordering Method for Parallel
@@ -678,11 +678,11 @@ ABMC オーダリングの実装は、圓谷友紀氏（福岡大学）から提
 
 2. E. Cuthill, J. McKee,
    "Reducing the Bandwidth of Sparse Symmetric Matrices",
-   *Proc. 24th Nat. Conf. ACM*, pp. 157–172, 1969.
+   *Proc. 24th Nat. Conf. ACM*, pp. 157--172, 1969.
    [DOI: 10.1145/800195.805928](https://doi.org/10.1145/800195.805928)
 
 3. J. A. Meijerink, H. A. van der Vorst,
    "An Iterative Solution Method for Linear Systems of Which the
    Coefficient Matrix is a Symmetric M-Matrix",
-   *Math. Comp.*, Vol. 31, No. 137, pp. 148–162, 1977.
+   *Math. Comp.*, Vol. 31, No. 137, pp. 148--162, 1977.
    [DOI: 10.1090/S0025-5718-1977-0438681-4](https://doi.org/10.1090/S0025-5718-1977-0438681-4)

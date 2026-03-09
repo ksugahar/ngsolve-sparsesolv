@@ -344,10 +344,12 @@ private:
             parallel_for(level_size, [&](index_t idx) {
                 const index_t i = level[idx];
                 Scalar s = rhs[i];
+                const index_t row_start = Lt_.row_ptr[i];
                 const index_t row_end = Lt_.row_ptr[i + 1];
-                for (index_t k = Lt_.row_ptr[i] + 1; k < row_end; ++k)
+                if (row_start >= row_end) { y[i] = Scalar(0); return; }
+                for (index_t k = row_start + 1; k < row_end; ++k)
                     s -= Lt_.values[k] * y[Lt_.col_idx[k]];
-                y[i] = s / Lt_.values[Lt_.row_ptr[i]];
+                y[i] = s / Lt_.values[row_start];
             });
         }
     }

@@ -29,6 +29,10 @@ public:
 
     /// Add a single entry
     void add(index_t row, index_t col, Scalar value) {
+        if (row >= rows_ || col >= cols_)
+            throw std::out_of_range("SparseMatrixCOO::add: index (" + std::to_string(row)
+                + ", " + std::to_string(col) + ") out of range (" + std::to_string(rows_)
+                + " x " + std::to_string(cols_) + ")");
         entries_.push_back({row, col, value});
     }
 

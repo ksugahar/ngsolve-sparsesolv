@@ -68,38 +68,77 @@ public:
      */
     void setup(const SparseMatrixView<Scalar>& A) override {
         const index_t n = A.rows();
+        const index_t nnz = A.row_ptr()[n];
         size_ = n;
 
-        // Clear state from previous setup
-        rcm_ordering_.clear();
-        rcm_reverse_ordering_.clear();
-        rcm_csr_.clear();
+        // Check if sparsity pattern is unchanged (Newton iteration optimization).
+        // When pattern is the same AND the same code path (ABMC vs standard) is
+        // used, skip ordering/scheduling rebuild and only update values + refactorize.
+        // Path switch (e.g., use_abmc changed after construction) forces full rebuild.
+        const bool pattern_unchanged = this->is_setup_
+                                       && cached_n_ == n
+                                       && cached_nnz_ == nnz
+                                       && cached_use_abmc_ == config_.use_abmc;
+
         if (config_.use_abmc) {
             // ============================================================
             // ABMC path: reorder + color-parallel IC
             // ============================================================
-            const index_t* src_row_ptr = A.row_ptr();
-            const index_t* src_col_idx = A.col_idx();
 
-            if (config_.abmc_use_rcm) {
-                compute_rcm_ordering(A.row_ptr(), A.col_idx(), n,
-                                     rcm_ordering_, rcm_reverse_ordering_);
-                reorder_matrix_with_perm(A, rcm_ordering_, rcm_csr_);
-                src_row_ptr = rcm_csr_.row_ptr.data();
-                src_col_idx = rcm_csr_.col_idx.data();
-            }
+            if (!pattern_unchanged) {
+                // Full ordering rebuild (first call or pattern changed)
+                rcm_ordering_.clear();
+                rcm_reverse_ordering_.clear();
+                rcm_csr_.clear();
 
-            abmc_schedule_.build(src_row_ptr, src_col_idx, n,
-                                 config_.abmc_block_size, config_.abmc_num_colors);
+                const index_t* src_row_ptr = A.row_ptr();
+                const index_t* src_col_idx = A.col_idx();
 
-            if (config_.abmc_use_rcm) {
-                SparseMatrixView<Scalar> rcm_view(
-                    rcm_csr_.rows, rcm_csr_.cols,
-                    rcm_csr_.row_ptr.data(), rcm_csr_.col_idx.data(),
-                    rcm_csr_.values.data());
-                reorder_matrix(rcm_view);
+                if (config_.abmc_use_rcm) {
+                    compute_rcm_ordering(A.row_ptr(), A.col_idx(), n,
+                                         rcm_ordering_, rcm_reverse_ordering_);
+                    reorder_matrix_with_perm(A, rcm_ordering_, rcm_csr_);
+                    src_row_ptr = rcm_csr_.row_ptr.data();
+                    src_col_idx = rcm_csr_.col_idx.data();
+                }
+
+                abmc_schedule_.build(src_row_ptr, src_col_idx, n,
+                                     config_.abmc_block_size, config_.abmc_num_colors);
+
+                if (config_.abmc_use_rcm) {
+                    SparseMatrixView<Scalar> rcm_view(
+                        rcm_csr_.rows, rcm_csr_.cols,
+                        rcm_csr_.row_ptr.data(), rcm_csr_.col_idx.data(),
+                        rcm_csr_.values.data());
+                    reorder_matrix(rcm_view);
+                } else {
+                    reorder_matrix(A);
+                }
+
+                work_temp_.resize(n);
+                if (config_.diagonal_scaling) {
+                    work_temp2_.resize(n);
+                }
+
+                abmc_x_perm_.resize(n);
+                abmc_y_perm_.resize(n);
+                build_composite_permutations(n);
+
+                cached_n_ = n;
+                cached_nnz_ = nnz;
+                cached_use_abmc_ = true;
             } else {
-                reorder_matrix(A);
+                // Pattern unchanged: reuse ABMC/RCM ordering, only update values
+                if (config_.abmc_use_rcm) {
+                    reorder_matrix_with_perm(A, rcm_ordering_, rcm_csr_);
+                    SparseMatrixView<Scalar> rcm_view(
+                        rcm_csr_.rows, rcm_csr_.cols,
+                        rcm_csr_.row_ptr.data(), rcm_csr_.col_idx.data(),
+                        rcm_csr_.values.data());
+                    reorder_matrix(rcm_view);
+                } else {
+                    reorder_matrix(A);
+                }
             }
 
             SparseMatrixView<Scalar> A_reordered(
@@ -127,15 +166,6 @@ public:
 
             compute_transpose();
 
-            work_temp_.resize(n);
-            if (config_.diagonal_scaling) {
-                work_temp2_.resize(n);
-            }
-
-            abmc_x_perm_.resize(n);
-            abmc_y_perm_.resize(n);
-            build_composite_permutations(n);
-
         } else {
             // ============================================================
             // Standard path: extract + level-schedule
@@ -152,13 +182,19 @@ public:
             compute_ic_factorization();
             compute_transpose();
 
-            work_temp_.resize(n);
-            if (config_.diagonal_scaling) {
-                work_temp2_.resize(n);
-            }
+            if (!pattern_unchanged) {
+                work_temp_.resize(n);
+                if (config_.diagonal_scaling) {
+                    work_temp2_.resize(n);
+                }
 
-            fwd_schedule_.build_from_lower(L_.row_ptr.data(), L_.col_idx.data(), n);
-            bwd_schedule_.build_from_upper(Lt_.row_ptr.data(), Lt_.col_idx.data(), n);
+                fwd_schedule_.build_from_lower(L_.row_ptr.data(), L_.col_idx.data(), n);
+                bwd_schedule_.build_from_upper(Lt_.row_ptr.data(), Lt_.col_idx.data(), n);
+
+                cached_n_ = n;
+                cached_nnz_ = nnz;
+                cached_use_abmc_ = false;
+            }
         }
 
         this->is_setup_ = true;
@@ -525,6 +561,11 @@ private:
     SparseMatrixCSR<Scalar> reordered_csr_;  // Temporary: reordered full matrix
     mutable std::vector<Scalar> abmc_x_perm_;   // Work vector: permuted input
     mutable std::vector<Scalar> abmc_y_perm_;   // Work vector: permuted output
+
+    // Sparsity pattern cache (for Newton iteration: skip ordering rebuild)
+    index_t cached_n_ = 0;
+    index_t cached_nnz_ = 0;
+    bool cached_use_abmc_ = false;  // which path was used for cached ordering
 
     // RCM ordering support (Approach B)
     std::vector<index_t> rcm_ordering_;          // rcm_ordering_[old] = new

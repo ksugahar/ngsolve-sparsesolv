@@ -23,13 +23,14 @@
 #include "solvers/iterative_solver.hpp"
 #include "solvers/cg_solver.hpp"
 #include "solvers/cocr_solver.hpp"
+#include "solvers/bicgstab_solver.hpp"
 #include "solvers/sgs_mrtr_solver.hpp"
 
 namespace sparsesolv {
 
 struct Version {
     static constexpr int major = 2;
-    static constexpr int minor = 1;
+    static constexpr int minor = 6;
     static constexpr int patch = 0;
 
     static std::string string() {

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(SparseSolv VERSION 2.1.0 LANGUAGES CXX)
+project(SparseSolv VERSION 2.6.0 LANGUAGES CXX)
 
 # Header-only library
 add_library(sparsesolv INTERFACE)
@@ -103,40 +103,6 @@ if paths: print(paths[0])
 
     # MKL BLAS/LAPACK for dense matrix operations
     target_compile_definitions(sparsesolv_ngsolve PRIVATE SPARSESOLV_USE_MKL)
-
-    # HYPRE AMS (optional)
-    option(SPARSESOLV_USE_HYPRE "Enable HYPRE AMS preconditioner" OFF)
-    if(SPARSESOLV_USE_HYPRE)
-        set(HYPRE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/hypre" CACHE PATH "HYPRE source directory")
-        set(HYPRE_BUILD_DIR "${HYPRE_DIR}/build" CACHE PATH "HYPRE build directory")
-
-        # HYPRE headers (source + generated config)
-        target_include_directories(sparsesolv_ngsolve PRIVATE
-            ${HYPRE_DIR}/src
-            ${HYPRE_DIR}/src/utilities
-            ${HYPRE_DIR}/src/IJ_mv
-            ${HYPRE_DIR}/src/parcsr_mv
-            ${HYPRE_DIR}/src/parcsr_ls
-            ${HYPRE_DIR}/src/seq_mv
-            ${HYPRE_DIR}/src/multivector
-            ${HYPRE_DIR}/src/krylov
-            ${HYPRE_BUILD_DIR}
-        )
-
-        # HYPRE static library
-        find_library(HYPRE_LIBRARY HYPRE
-            PATHS ${HYPRE_BUILD_DIR}/Release ${HYPRE_BUILD_DIR}
-            NO_DEFAULT_PATH)
-        if(NOT HYPRE_LIBRARY)
-            message(FATAL_ERROR "HYPRE library not found. Build HYPRE first:\n"
-                "  cd external/hypre && mkdir build && cd build\n"
-                "  cmake ../src -DHYPRE_WITH_MPI=OFF -DCMAKE_BUILD_TYPE=Release\n"
-                "  cmake --build . --config Release")
-        endif()
-        message(STATUS "Found HYPRE: ${HYPRE_LIBRARY}")
-        target_link_libraries(sparsesolv_ngsolve PRIVATE ${HYPRE_LIBRARY})
-        target_compile_definitions(sparsesolv_ngsolve PRIVATE SPARSESOLV_USE_HYPRE)
-    endif()
 
     # Install the Python module
     if(SKBUILD)

@@ -1,15 +1,15 @@
-# 開発者向け情報
+# Developer Guide
 
-## ビルド手順
+## Build Instructions
 
-### 前提条件
+### Prerequisites
 
-- NGSolve (ソースビルドまたはpipインストール) + CMake設定ファイル
-- CMake 3.16以上
-- C++17対応コンパイラ (MSVC 2022, GCC 10+, Clang 10+)
-- pybind11 (CMakeが自動取得)
+- NGSolve (source build or pip install) + CMake configuration files
+- CMake 3.16 or later
+- C++17-compatible compiler (MSVC 2022, GCC 10+, Clang 10+)
+- pybind11 (automatically fetched by CMake)
 
-### ビルドコマンド
+### Build Commands
 
 ```bash
 git clone https://github.com/ksugahar/ngsolve-sparsesolv.git
@@ -22,7 +22,7 @@ cmake .. -DSPARSESOLV_BUILD_NGSOLVE=ON \
 cmake --build . --config Release
 ```
 
-**Intel MKL使用時** (BLAS/LAPACK + HYPRE AMS):
+**When using Intel MKL** (BLAS used internally by CompactAMG/AMS):
 
 ```bash
 cmake .. -DSPARSESOLV_BUILD_NGSOLVE=ON \
@@ -30,10 +30,10 @@ cmake .. -DSPARSESOLV_BUILD_NGSOLVE=ON \
          -DCMAKE_PREFIX_PATH="C:/Program Files (x86)/Intel/oneAPI/mkl/latest"
 ```
 
-### インストール
+### Installation
 
 ```bash
-# NGSolve site-packages にコピー
+# Copy to NGSolve site-packages
 SITE_PACKAGES=$(python -c "import ngsolve, pathlib; print(pathlib.Path(ngsolve.__file__).parent.parent)")
 mkdir -p "$SITE_PACKAGES/sparsesolv_ngsolve"
 cp build/Release/sparsesolv_ngsolve*.pyd "$SITE_PACKAGES/sparsesolv_ngsolve/"
@@ -42,81 +42,80 @@ echo "from .sparsesolv_ngsolve import *" > "$SITE_PACKAGES/sparsesolv_ngsolve/__
 
 ---
 
-## テスト実行
+## Running Tests
 
 ```bash
 python -m pytest tests/test_sparsesolv.py -v --tb=short
 ```
 
-テスト構成:
-- `test_sparsesolv.py`: ソルバー・前処理テスト (46件)
-  - ICCG, SGSMRTR, CG, IC, SGS の各種問題
-  - 2D/3D, H1/VectorH1/HCurl, 実数/複素数
-  - ABMC順序付け, 対角スケーリング, auto-shift
+Test structure:
+- `test_sparsesolv.py`: Solver and preconditioner tests (46 cases)
+  - ICCG, SGSMRTR, CG, IC, SGS for various problems
+  - 2D/3D, H1/VectorH1/HCurl, real/complex
+  - ABMC ordering, diagonal scaling, auto-shift
 
 ---
 
-## 過去のバグと教訓
+## Past Bugs and Lessons Learned
 
-### 1. DenseMatrix P^T バグ
+### 1. DenseMatrix P^T Bug
 
-**問題**: 密LU逆行列で、置換行列を P^T として構築していた。
+**Problem**: In the dense LU inverse, the permutation matrix was constructed as P^T instead of P.
 
 ```cpp
-// 間違い (P^T):
+// Wrong (P^T):
 inv(piv[j], j) = Scalar(1);
 
-// 正しい (P):
+// Correct (P):
 inv(k, piv[k]) = Scalar(1);
 ```
 
-**教訓**: PA = LU の P は「行 k を piv[k] 行目に移す」行列。
-P[k, piv[k]] = 1 が正しい構築法。
+**Lesson**: In PA = LU, P is the matrix that "moves row k to row piv[k]".
+The correct construction is P[k, piv[k]] = 1.
 
-### 2. 複素内積 (非共役 vs 共役)
+### 2. Complex Inner Product (Non-conjugate vs Conjugate)
 
-**問題**: CG法の内積で `std::conj(a[i]) * b[i]` (共役内積) を使用していた。
+**Problem**: The CG solver was using the conjugate inner product `std::conj(a[i]) * b[i]`.
 
-FEM行列は**複素対称** (A^T = A) であり、エルミート (A^H = A) ではない。
-例: 渦電流方程式 curl-curl + iσ mass。
+FEM matrices are **complex-symmetric** (A^T = A), not Hermitian (A^H = A).
+Example: the eddy current equation curl-curl + i*sigma*mass.
 
 ```cpp
-// 間違い (Hermitian用):
+// Wrong (for Hermitian matrices):
 sum += std::conj(a[i]) * b[i];
 
-// 正しい (complex-symmetric用):
+// Correct (for complex-symmetric matrices):
 sum += a[i] * b[i];
 ```
 
-**症状**: 渦電流問題で 5000反復でも発散。
-修正後: 58反復で収束。
+**Symptom**: Divergence after 5000 iterations on eddy current problems.
+After the fix: convergence in 58 iterations.
 
-**教訓**: FEMの複素数問題では常に非共役内積を使用。
-NGSolveの `CGSolver(conjugate=False)` に対応。
+**Lesson**: Always use the non-conjugate inner product for complex FEM problems.
+This corresponds to NGSolve's `CGSolver(conjugate=False)`.
 
-### 3. SGS-MRTR 複素比較
+### 3. SGS-MRTR Complex Comparison
 
-**問題**: SGS-MRTRの ζ 計算で `denom >= 0` を使用していたが、
-`std::complex<double>` は `>=` 演算子を持たない。
+**Problem**: The zeta calculation in SGS-MRTR used `denom >= 0`, but
+`std::complex<double>` does not have a `>=` operator.
 
 ```cpp
-// 修正後:
+// Fixed:
 denom = (std::real(denom) >= 0) ? ... : ...;
 ```
 
 ---
 
-## NGSolve API注意点
+## NGSolve API Notes
 
 ### AutoVector
 
-NGSolveの `BaseVector::CreateVector()` は `AutoVector` を返す。
-これは shared_ptr ライクなセマンティクスを持つが、
-独自のムーブ/コピー規約がある。
+NGSolve's `BaseVector::CreateVector()` returns an `AutoVector`.
+It has shared_ptr-like semantics but with its own move/copy conventions.
 
 ### CalcElementMatrix
 
-要素行列の計算には `LocalHeap` が必要:
+Computing element matrices requires a `LocalHeap`:
 
 ```cpp
 LocalHeap lh(10000000, "name", true);  // mult_by_threads=true
@@ -132,32 +131,32 @@ IterateElements(*fes, VOL, lh,
 
 ### IsRegularDof
 
-要素のDOFリストには無効DOF (< 0) が含まれる場合がある。
-`IsRegularDof(dnum)` でフィルタリングする:
+An element's DOF list may contain invalid DOFs (< 0).
+Use `IsRegularDof(dnum)` to filter them:
 
 ```cpp
 auto dnums = el.GetDofs();
 for (int i = 0; i < dnums.Size(); ++i) {
     if (IsRegularDof(dnums[i])) {
-        // 有効DOF
+        // Valid DOF
     }
 }
 ```
 
 ---
 
-## 参考文献
+## References
 
 1. J. A. Meijerink, H. A. van der Vorst,
    "An Iterative Solution Method for Linear Systems of Which the
    Coefficient Matrix is a Symmetric M-Matrix",
-   *Math. Comp.*, Vol. 31, No. 137, pp. 148–162, 1977.
+   *Math. Comp.*, Vol. 31, No. 137, pp. 148-162, 1977.
    [DOI: 10.1090/S0025-5718-1977-0438681-4](https://doi.org/10.1090/S0025-5718-1977-0438681-4)
 
 2. M. R. Hestenes, E. Stiefel,
    "Methods of Conjugate Gradients for Solving Linear Systems",
    *J. Research of the National Bureau of Standards*,
-   Vol. 49, No. 6, pp. 409–436, 1952.
+   Vol. 49, No. 6, pp. 409-436, 1952.
    [DOI: 10.6028/jres.049.044](https://doi.org/10.6028/jres.049.044)
 
 3. T. Iwashita, H. Nakashima, Y. Takahashi,
@@ -168,22 +167,24 @@ for (int i = 0; i < dnums.Size(); ++i) {
 
 4. E. Cuthill, J. McKee,
    "Reducing the Bandwidth of Sparse Symmetric Matrices",
-   *Proc. 24th Nat. Conf. ACM*, pp. 157–172, 1969.
+   *Proc. 24th Nat. Conf. ACM*, pp. 157-172, 1969.
    [DOI: 10.1145/800195.805928](https://doi.org/10.1145/800195.805928)
 
-5. 圓谷友紀, 三船泰, 岩下武史, 高橋英治,
-   "MRTR法に基づく前処理付き反復法の数値実験",
-   *電気学会研究会資料*, SA-12-64, 2012.
+5. 圓谷友紀 (T. Tsuburaya), 三船泰 (Y. Mifune), 岩下武史 (T. Iwashita), 高橋英治 (E. Takahashi),
+   "MRTR法に基づく前処理付き反復法の数値実験"
+   (Numerical experiments on preconditioned iterative methods based on the MRTR method),
+   *電気学会研究会資料* (IEEJ Technical Meeting Papers), SA-12-64, 2012.
 
 6. T. Tsuburaya, Y. Okamoto, K. Fujiwara, S. Sato,
    "Improvement of the Preconditioned MRTR Method With Eisenstat's Technique
    in Real Symmetric Sparse Matrices",
-   *IEEE Trans. Magnetics*, Vol. 49, No. 5, pp. 1641–1644, 2013.
+   *IEEE Trans. Magnetics*, Vol. 49, No. 5, pp. 1641-1644, 2013.
    [DOI: 10.1109/TMAG.2013.2240283](https://doi.org/10.1109/TMAG.2013.2240283)
 
-7. 圓谷友紀,
-   "大規模電磁界問題の有限要素解析のための反復法の開発",
-   博士論文, 宇都宮大学, 2016.
+7. 圓谷友紀 (T. Tsuburaya),
+   "大規模電磁界問題の有限要素解析のための反復法の開発"
+   (Development of iterative methods for finite element analysis of large-scale electromagnetic field problems),
+   Doctoral dissertation, 宇都宮大学 (Utsunomiya University), 2016.
 
 8. JP-MARs/SparseSolv,
     https://github.com/JP-MARs/SparseSolv
