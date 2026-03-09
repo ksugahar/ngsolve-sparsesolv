@@ -38,7 +38,7 @@ namespace ngla {
 /// Usage:
 ///   auto ams = make_shared<CompactAMS>(mat, grad, freedofs,
 ///                                      coord_x, coord_y, coord_z);
-///   // Use as preconditioner with BiCGStab
+///   // Use as preconditioner with COCR or CG
 class CompactAMS : public BaseMatrix {
 public:
     /// @param mat       HCurl system matrix (SparseMatrix<double>)

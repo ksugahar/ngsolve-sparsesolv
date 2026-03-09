@@ -45,7 +45,7 @@ struct CSRGraph {
 /// Usage:
 ///   auto amg = make_shared<CompactAMG>(mat, freedofs, 0.25, 25, 50, 1);
 ///   amg->Setup();
-///   // Use as preconditioner with BiCGStab or other Krylov solver
+///   // Use as preconditioner with CG or other Krylov solver
 class CompactAMG : public BaseMatrix {
 public:
     CompactAMG(shared_ptr<SparseMatrix<double>> mat,

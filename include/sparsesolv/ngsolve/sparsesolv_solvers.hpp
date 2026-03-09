@@ -25,7 +25,7 @@ using SparseSolvResult = sparsesolv::SolverResult;
 // SparseSolv Iterative Solver
 // ============================================================================
 
-/// Unified iterative solver: ICCG, SGSMRTR, CG, COCR, BiCGStab.
+/// Unified iterative solver: ICCG, SGSMRTR, CG, COCR.
 /// Use as BaseMatrix (inv * rhs) or call .Solve() for detailed results.
 ///
 /// Uses internal preconditioner (IC for ICCG, SGS for SGSMRTR, none for CG/COCR).
@@ -121,19 +121,10 @@ public:
             sparsesolv::COCRSolver<SCAL> solver;
             solver.set_config(config);
             result = solver.solve(view, b_ptr, x_ptr, height_, nullptr);
-        } else if (method_ == "BiCGStab" || method_ == "bicgstab" || method_ == "BICGSTAB") {
-            // IC-preconditioned BiCGStab
-            sparsesolv::ICPreconditioner<SCAL> precond(config.shift_parameter);
-            precond.set_config(config);
-            precond.setup(view);
-
-            sparsesolv::BiCGStabSolver<SCAL> solver;
-            solver.set_config(config);
-            result = solver.solve(view, b_ptr, x_ptr, height_, &precond);
         } else {
             throw std::runtime_error(
                 "SparseSolvSolver: Unknown method '" + method_ +
-                "'. Available: ICCG, SGSMRTR, CG, COCR, BiCGStab");
+                "'. Available: ICCG, SGSMRTR, CG, COCR");
         }
 
         // Copy solution back (only free DOFs)
