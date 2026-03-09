@@ -1,13 +1,13 @@
-# Practical Tutorials
+# 実践チュートリアル
 
-Complete, copy-and-paste-ready examples. Each example prints setup time, CG iteration count,
-solve time, and solution accuracy.
+コピー&ペーストですぐに実行できる完全な例題集です。各例題では、セットアップ時間、CG反復回数、
+求解時間、および解の精度を出力します。
 
 ---
 
 ## 1. H1 Poisson 3D
 
-Poisson equation on a 3D unit cube. Compares three methods: BDDC (NGSolve built-in), IC, and SGS.
+3D単位立方体上のPoisson方程式。BDDC（NGSolve組込み）、IC、SGSの3手法を比較します。
 
 ```python
 import time
@@ -87,7 +87,7 @@ print(f"SGS+CG:  setup={t_setup:.3f}s, solve={t_solve:.3f}s, "
       f"iters={inv.iterations}, error={err:.2e}")
 ```
 
-**Typical output** (maxh=0.3, order=3):
+**典型的な出力** (maxh=0.3, order=3):
 ```
 DOF: ~8000
 BDDC+CG: setup=0.15s, solve=0.01s, iters=2,   error=2.5e-11
@@ -97,9 +97,9 @@ SGS+CG:  setup=0.00s, solve=0.25s, iters=180, error=4.2e-11
 
 ---
 
-## 2. VectorH1 Elasticity
+## 2. VectorH1 弾性問題
 
-3D elasticity problem. All faces fixed, body force (0, 0, -1).
+3D弾性問題。全面固定、体積力 (0, 0, -1)。
 
 ```python
 import time
@@ -173,15 +173,15 @@ print(f"IC:   setup={t_setup:.3f}s, solve={t_solve:.3f}s, "
 
 ---
 
-## 3. HCurl Curl-Curl (Real)
+## 3. HCurl Curl-Curl（実数）
 
-Magnetic vector potential problem. A regularization term sigma|u|^2 is added.
-The source term is curl-based (guaranteeing discrete div-free property).
-Accuracy is evaluated via B = curl(A).
+磁気ベクトルポテンシャル問題。正則化項 sigma|u|^2 を付加しています。
+ソース項はcurlベース（離散的にdiv-freeであることが保証される）です。
+精度は B = curl(A) により評価します。
 
-**Notes**:
-- `nograds=True` excludes gradient DOFs (reduces DOF count + improves condition number)
-- A small regularization value sigma (1e-6) is sufficient
+**注意事項**:
+- `nograds=True` は勾配DOFを除外します（DOF数の削減 + 条件数の改善）
+- 小さな正則化値 sigma（1e-6）で十分です
 
 ```python
 import time
@@ -241,10 +241,10 @@ print(f"ICCG: setup={t_setup:.3f}s, solve={t_solve:.3f}s, "
 
 ---
 
-## 4. HCurl Eddy Current (Complex)
+## 4. HCurl 渦電流問題（複素数）
 
-Eddy current problem (curl-curl + i*sigma mass). Complex symmetric matrix.
-`conjugate=False` is important (non-conjugate inner product).
+渦電流問題（curl-curl + i*sigma 質量項）。複素対称行列です。
+`conjugate=False` が重要です（非共役内積を使用）。
 
 ```python
 import time
@@ -297,22 +297,22 @@ print(f"ICCG: setup={t_setup:.3f}s, solve={t_solve:.3f}s, "
       f"iters={iters}, B error={B_err:.2e}")
 ```
 
-**Note**: When using NGSolve's `CGSolver` for complex symmetric systems, `conjugate=False` is required.
-FEM matrices are complex symmetric (A^T = A), not Hermitian (A^H = A).
-Setting `conjugate=True` will cause divergence.
-`SparseSolvSolver` automatically uses the correct inner product depending on the method.
+**注意**: NGSolveの`CGSolver`を複素対称系に使用する場合、`conjugate=False`が必要です。
+FEM行列は複素対称（A^T = A）であり、エルミート（A^H = A）ではありません。
+`conjugate=True`に設定すると発散します。
+`SparseSolvSolver`は手法に応じて正しい内積を自動的に選択します。
 
-**Solver selection**:
-- **COCR** (recommended): Optimal for complex symmetric systems. Use with symmetric preconditioners (IC, Compact AMS)
-- **GMRES**: Use only when the preconditioner is non-symmetric
+**ソルバー選択**:
+- **COCR**（推奨）: 複素対称系に最適。対称前処理（IC、Compact AMS）と組み合わせて使用
+- **GMRES**: 前処理が非対称の場合にのみ使用
 
 ---
 
-## 5. HCurl Magnetostatics -- Compact AMS + CG (Real)
+## 5. HCurl 静磁場 -- Compact AMS + CG（実数）
 
-Uses Compact AMS preconditioning for a real HCurl curl-curl problem.
-Instead of ICCG, the AMS auxiliary space handles the curl-curl null space,
-so the iteration count remains stable with respect to mesh size for large-scale problems.
+実数HCurl curl-curl問題に対してCompact AMS前処理を使用します。
+ICCGの代わりに、AMS補助空間がcurl-curlの零空間を処理するため、
+大規模問題ではメッシュサイズに対して反復回数が安定します。
 
 ```python
 import time
@@ -376,10 +376,10 @@ print(f"AMS+CG: setup={t_setup:.3f}s, solve={t_solve:.3f}s, "
 
 ---
 
-## 6. Newton Iteration -- Compact AMS + Update()
+## 6. Newton反復 -- Compact AMS + Update()
 
-Newton iteration for a nonlinear HCurl problem. `Update()` retains the geometric information
-(G, Pi matrices) and only rebuilds the matrix-dependent parts.
+非線形HCurl問題に対するNewton反復。`Update()` は幾何情報（G行列、Pi行列）を保持し、
+行列依存部分のみを再構築します。
 
 ```python
 import sparsesolv_ngsolve as ssn
@@ -428,47 +428,41 @@ for k in range(3):
     print(f"Newton step {k}: {inv.iterations} iterations")
 ```
 
-**Key points**:
-- `CompactAMSPreconditioner` is constructed only once (including geometric setup)
-- `Update(a.mat)` rebuilds only the matrix-dependent parts, making it faster than the initial construction
-- `ComplexCompactAMSPreconditioner` also supports `Update()` in the same way
+**要点**:
+- `CompactAMSPreconditioner` は1回だけ構築されます（幾何セットアップを含む）
+- `Update(a.mat)` は行列依存部分のみを再構築するため、初回構築より高速です
+- `ComplexCompactAMSPreconditioner` も同様に `Update()` をサポートしています
 
 ---
 
-## 7. HCurl Eddy Current -- Compact AMS + COCR (Complex)
+## 7. HCurl 渦電流 -- Compact AMS + COCR（複素数）
 
-Uses Compact AMS preconditioning with COCR (Conjugate Orthogonal Conjugate Residual) for
-complex-valued eddy current problems. COCR is the optimal Krylov solver for complex symmetric
-systems (A^T = A, not Hermitian).
+複素数の渦電流問題に対して、Compact AMS前処理とCOCR（Conjugate Orthogonal Conjugate Residual）を使用します。COCRは複素対称系（A^T = A、エルミートではない）に最適なKrylovソルバーです。
 
-### Why a real auxiliary matrix `a_real` is needed
+### 実数補助行列 `a_real` が必要な理由
 
-The AMS (Auxiliary space Maxwell Solver) preconditioner operates in **real arithmetic**. It
-cannot directly process the complex system matrix `K + j*omega*sigma*M`. Instead, we build a
-separate real SPD (Symmetric Positive Definite) matrix `a_real` that captures the spectral
-character of the complex operator. The AMS preconditioner is constructed from this real
-auxiliary matrix, and then applied to the complex system via COCR.
+AMS（Auxiliary space Maxwell Solver）前処理は**実数演算**で動作します。複素システム行列 `K + j*omega*sigma*M` を直接処理することはできません。代わりに、複素演算子のスペクトル特性を捉える実数SPD（対称正定値）行列 `a_real` を別途構築します。AMS前処理はこの実数補助行列から構築され、COCRを通じて複素系に適用されます。
 
-The formula for the real auxiliary matrix is:
+実数補助行列の式は以下の通りです:
 
 ```
 a_real = K + eps*M + |omega|*sigma * M_cond
 ```
 
-where:
+各項の意味:
 
-- **K** (curl-curl stiffness): `InnerProduct(curl(u), curl(v)) * dx` -- the main physics term
-- **eps*M** (small regularization): `eps * InnerProduct(u, v) * dx` with eps ~ 1e-6 -- regularizes the curl-curl null space (gradient fields) so the matrix is positive definite
-- **|omega|*sigma * M_cond** (conductor mass term): `|omega|*sigma * InnerProduct(u, v) * dx("conductor")` -- a mass term restricted to the conductor region that matches the **magnitude** of the imaginary part `j*omega*sigma*M`, ensuring the preconditioner reflects the operator's spectral behavior in conducting regions
+- **K**（curl-curl剛性項）: `InnerProduct(curl(u), curl(v)) * dx` -- 主要な物理項
+- **eps*M**（小さな正則化項）: `eps * InnerProduct(u, v) * dx`（eps ~ 1e-6）-- curl-curlの零空間（勾配場）を正則化し、行列を正定値にする
+- **|omega|*sigma * M_cond**（導体質量項）: `|omega|*sigma * InnerProduct(u, v) * dx("conductor")` -- 導体領域に限定した質量項で、虚部 `j*omega*sigma*M` の**大きさ**に一致させ、前処理が導体領域における演算子のスペクトル挙動を反映するようにする
 
-### Key requirements
+### 要件
 
-- **`fes_real`** (non-complex HCurl) must be used for the AMS preconditioner. **`fes`** (complex HCurl) is used for the COCR solver. The `freedofs` must match between the two spaces -- since both are built on the same mesh with the same `order`, `dirichlet`, and `nograds` settings, `fes_real.FreeDofs()` and `fes.FreeDofs()` are consistent.
-- **`nograds=True` is REQUIRED**: Gradient DOFs are already handled by the AMS gradient correction (the discrete gradient matrix G). Including them is redundant and degrades conditioning.
-- **`order=1` is the current limitation**: Compact AMS is designed for lowest-order Nedelec elements. For higher-order HCurl spaces, use NGSolve BDDC instead.
-- **`TaskManager()` context is required** for parallel execution of the COCR solve and AMS preconditioning.
+- **`fes_real`**（非複素HCurl）をAMS前処理に使用する必要があります。**`fes`**（複素HCurl）はCOCRソルバーに使用します。両空間の`freedofs`は一致する必要がありますが、同じメッシュ上で同じ`order`、`dirichlet`、`nograds`設定で構築されるため、`fes_real.FreeDofs()`と`fes.FreeDofs()`は整合しています。
+- **`nograds=True` は必須です**: 勾配DOFはAMSの勾配補正（離散勾配行列G）で既に処理されます。含めると冗長になり、条件数が悪化します。
+- **`order=1` が現在の制限です**: Compact AMSは最低次Nedelec要素向けに設計されています。高次HCurl空間にはNGSolve BDDCを使用してください。
+- **`TaskManager()` コンテキストが必要です**: COCR求解とAMS前処理の並列実行に必要です。
 
-### Complete example
+### 完全な例題
 
 ```python
 import time
@@ -555,10 +549,9 @@ print(f"AMS+COCR: setup={t_setup:.3f}s, solve={t_solve:.3f}s, "
       f"iters={iters}, B error={B_err:.2e}, ||u||={sol_norm:.6e}")
 ```
 
-### Comparison with ICCG
+### ICCGとの比較
 
-On the same problem, ICCG (shifted incomplete Cholesky) requires significantly more iterations
-than Compact AMS + COCR, and the gap widens with mesh refinement:
+同じ問題に対して、ICCG（シフト付き不完全コレスキー分解）はCompact AMS + COCRよりも大幅に多くの反復を必要とし、メッシュ細分化に伴いその差は拡大します:
 
 ```python
 # --- ICCG for comparison ---
@@ -580,20 +573,18 @@ print(f"ICCG:     setup={t_setup_ic:.3f}s, solve={t_solve_ic:.3f}s, "
       f"iters={iters_ic}, B error={B_err_ic:.2e}")
 ```
 
-**Typical output** (maxh=0.3, order=1):
+**典型的な出力** (maxh=0.3, order=1):
 ```
 DOF (complex): ~500
 AMS+COCR: setup=0.01s, solve=0.01s, iters=12,  B error=3.5e-11
 ICCG:     setup=0.01s, solve=0.02s, iters=48,  B error=4.1e-11
 ```
 
-At larger scale (maxh=0.05, ~100k DOFs), AMS+COCR typically converges in 15-25 iterations
-while ICCG requires 300+ iterations, demonstrating the mesh-size-independent convergence
-of AMS preconditioning.
+大規模問題（maxh=0.05、約100k DOFs）では、AMS+COCRは通常15-25回の反復で収束するのに対し、ICCGは300回以上の反復を必要とします。これはAMS前処理のメッシュサイズに依存しない収束性を示しています。
 
-### Utility: Vertex coordinate extraction
+### ユーティリティ: 頂点座標の抽出
 
-The AMS preconditioner requires vertex coordinates. Here is a reusable snippet:
+AMS前処理には頂点座標が必要です。以下は再利用可能なコードスニペットです:
 
 ```python
 def get_vertex_coords(mesh):
@@ -604,33 +595,32 @@ def get_vertex_coords(mesh):
     return coord_x, coord_y, coord_z
 ```
 
-Note: NGSolve's `mesh.ngmesh.Points()` is **1-indexed** (index 0 is invalid), so the loop
-starts at `i+1`.
+注意: NGSolveの`mesh.ngmesh.Points()`は**1始まりのインデックス**（インデックス0は無効）であるため、ループは`i+1`から始まります。
 
 ---
 
-## 8. Solver Selection Guide
+## 8. ソルバー選択ガイド
 
-| Problem characteristics | Recommended method | Reason |
-|------------------------|-------------------|--------|
-| HCurl magnetostatics (real, large-scale) | **Compact AMS+CG** | AMS auxiliary space handles curl-curl null space |
-| HCurl magnetostatics (nonlinear) | **Compact AMS+CG** | `Update()` supports Newton iteration |
-| HCurl eddy current (complex, large-scale) | **Compact AMS+COCR** | Fused Re/Im with AMS auxiliary space handling |
-| HCurl curl-curl (real, medium-scale) | **Shifted-ICCG** | Enable auto_shift |
-| H1 | **ICCG** | Memory-efficient and fast |
-| HCurl eddy current (small to medium-scale) | **ICCG** or **COCR** | Complex symmetric matrix support |
-| Small-scale (DOF < 1000) | Direct solver (`sparsecholesky`) | Iterative method overhead is too large |
-| IC preconditioner parallelization | ABMC (`use_abmc=True`) | Improves parallelism of triangular solves |
+| 問題の特性 | 推奨手法 | 理由 |
+|-----------|---------|------|
+| HCurl 静磁場（実数、大規模） | **Compact AMS+CG** | AMS補助空間がcurl-curlの零空間を処理 |
+| HCurl 静磁場（非線形） | **Compact AMS+CG** | `Update()` がNewton反復をサポート |
+| HCurl 渦電流（複素数、大規模） | **Compact AMS+COCR** | Re/Im融合とAMS補助空間処理 |
+| HCurl curl-curl（実数、中規模） | **Shifted-ICCG** | auto_shiftを有効にする |
+| H1 | **ICCG** | メモリ効率が高く高速 |
+| HCurl 渦電流（小〜中規模） | **ICCG** または **COCR** | 複素対称行列をサポート |
+| 小規模（DOF < 1000） | 直接法（`sparsecholesky`） | 反復法のオーバーヘッドが大きすぎる |
+| IC前処理の並列化 | ABMC（`use_abmc=True`） | 三角求解の並列性を向上 |
 
-### Source Configuration for HCurl Problems
+### HCurl問題におけるソース項の設定
 
-In HCurl (curl-curl) problems, if the right-hand side source term is not discretely div-free,
-iterative solvers may fail to converge:
+HCurl（curl-curl）問題では、右辺のソース項が離散的にdiv-freeでない場合、
+反復ソルバーが収束しないことがあります:
 
-| Source configuration | Discretely div-free | Convergence |
-|---------------------|---------------------|-------------|
-| `int J . v dx` (direct) | Not guaranteed | May not converge |
-| `int T . curl(v) dx` (curl-based) | Guaranteed | Always converges |
-| J after Helmholtz correction | Guaranteed | Always converges |
+| ソースの設定 | 離散的にdiv-free | 収束性 |
+|-------------|-----------------|--------|
+| `int J . v dx`（直接） | 保証されない | 収束しない場合がある |
+| `int T . curl(v) dx`（curlベース） | 保証される | 常に収束 |
+| Helmholtz補正後のJ | 保証される | 常に収束 |
 
-In eddy current problems, the i*sigma term naturally provides regularization, so this issue does not arise.
+渦電流問題では、i*sigma項が自然に正則化を与えるため、この問題は発生しません。

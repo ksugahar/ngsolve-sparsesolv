@@ -1,15 +1,205 @@
-# Developer Guide
+# 開発者ガイド
 
-## Build Instructions
+## アーキテクチャとソースコード構成
 
-### Prerequisites
+### ディレクトリ構成
 
-- NGSolve (source build or pip install) + CMake configuration files
-- CMake 3.16 or later
-- C++17-compatible compiler (MSVC 2022, GCC 10+, Clang 10+)
-- pybind11 (automatically fetched by CMake)
+```
+ngsolve-sparsesolv/
+├── include/sparsesolv/           # ヘッダオンリーライブラリ本体
+│   ├── sparsesolv.hpp            # メインヘッダ（全コンポーネントをinclude）
+│   ├── core/                     # 基盤コンポーネント
+│   │   ├── types.hpp             # 型定義 (index_t, complex_t)
+│   │   ├── constants.hpp         # 数値定数（許容誤差、閾値）
+│   │   ├── solver_config.hpp     # SolverConfig構造体
+│   │   ├── sparse_matrix_view.hpp # 非所有CSR行列ビュー（ゼロコピー）
+│   │   ├── sparse_matrix_coo.hpp # COO形式（アセンブリ用）
+│   │   ├── sparse_matrix_csr.hpp # CSR形式（格納用）
+│   │   ├── dense_matrix.hpp      # 密行列 + LU逆行列
+│   │   ├── preconditioner.hpp    # 前処理基底クラス（テンプレート）
+│   │   ├── parallel.hpp          # 並列化抽象レイヤ (TaskManager/OpenMP/逐次)
+│   │   ├── level_schedule.hpp    # レベルスケジューリング（三角求解の並列化）
+│   │   ├── abmc_ordering.hpp     # ABMC順序付け（三角求解の並列化）
+│   │   └── rcm_ordering.hpp      # RCMバンド幅縮小順序付け
+│   ├── preconditioners/          # 前処理の実装
+│   │   ├── ic_preconditioner.hpp # 不完全コレスキー (IC) 分解
+│   │   ├── sgs_preconditioner.hpp # 対称ガウス・ザイデル (SGS)
+│   │   ├── compact_amg.hpp     # CompactAMG（古典的AMG、ヘッダオンリー）
+│   │   ├── compact_ams.hpp     # CompactAMS（Hiptmair-Xu補助空間前処理）
+│   │   └── complex_compact_ams.hpp # ComplexCompactAMS（渦電流向け融合Re/Im）
+│   ├── solvers/                  # 反復法ソルバー
+│   │   ├── iterative_solver.hpp  # 反復法ソルバー基底クラス
+│   │   ├── cg_solver.hpp         # 共役勾配法 (CG)
+│   │   └── sgs_mrtr_solver.hpp   # SGS-MRTR（分割公式）
+│   └── ngsolve/                  # NGSolve統合レイヤ
+│       ├── sparsesolv_precond.hpp # BaseMatrixラッパー (IC, SGS, Compact AMS, Solver)
+│       └── sparsesolv_python_export.hpp # pybind11バインディング + ファクトリ関数
+├── ngsolve/
+│   └── python_module.cpp         # pybind11モジュールエントリポイント
+├── tests/
+│   └── test_sparsesolv.py        # ソルバーおよび前処理のテスト
+├── docs/                         # ドキュメント（このフォルダ）
+├── CMakeLists.txt                # ビルド設定
+└── LICENSE
+```
 
-### Build Commands
+### 設計方針
+
+#### ヘッダオンリー
+
+すべてのC++コードは`.hpp`ヘッダファイルで実装されている。
+コンパイル時にすべてインライン展開されるため、リンクの問題がなく配布も容易である。
+
+#### テンプレート設計
+
+すべてのアルゴリズムクラスは`template<typename Scalar>`でパラメータ化されている:
+
+```cpp
+template<typename Scalar = double>
+class ICPreconditioner : public Preconditioner<Scalar> { ... };
+```
+
+`Scalar`は`double`または`std::complex<double>`でインスタンス化される。
+これにより実数問題と複素数問題（例: 渦電流）を単一のコードベースで扱うことができる。
+
+#### 並列化抽象レイヤ
+
+`core/parallel.hpp`がコンパイル時にバックエンドを切り替える:
+
+| ビルド設定 | バックエンド | 用途 |
+|---|---|---|
+| `SPARSESOLV_USE_NGSOLVE_TASKMANAGER` | NGSolve TaskManager | NGSolve統合時 |
+| `_OPENMP` | OpenMP | スタンドアロン |
+| （いずれも未定義） | 逐次実行 | デバッグ |
+
+主要API:
+
+```cpp
+sparsesolv::parallel_for(n, [&](index_t i) { ... });
+sparsesolv::parallel_reduce(n, init, [&](index_t i) -> T { ... });
+sparsesolv::get_num_threads();
+```
+
+### ヘッダ依存関係
+
+```
+sparsesolv.hpp (メインヘッダ)
+├── core/types.hpp
+├── core/constants.hpp
+├── core/solver_config.hpp
+├── core/sparse_matrix_view.hpp ← core/parallel.hpp
+├── core/preconditioner.hpp ← core/sparse_matrix_view.hpp
+├── core/abmc_ordering.hpp
+├── preconditioners/ic_preconditioner.hpp
+│   ← core/preconditioner.hpp, core/level_schedule.hpp,
+│      core/abmc_ordering.hpp, core/rcm_ordering.hpp
+├── preconditioners/sgs_preconditioner.hpp
+│   ← core/preconditioner.hpp
+├── solvers/iterative_solver.hpp
+│   ← core/preconditioner.hpp, core/sparse_matrix_view.hpp
+├── solvers/cg_solver.hpp
+│   ← solvers/iterative_solver.hpp
+└── solvers/sgs_mrtr_solver.hpp
+    ← solvers/iterative_solver.hpp, core/level_schedule.hpp
+```
+
+NGSolve統合レイヤ（NGSolveとビルドする場合のみ）:
+
+```
+ngsolve/sparsesolv_precond.hpp   ← sparsesolv.hpp + NGSolveヘッダ
+ngsolve/sparsesolv_python_export.hpp ← sparsesolv_precond.hpp + pybind11
+```
+
+### NGSolve統合レイヤ
+
+#### SparseMatrixView（ゼロコピーラッパー）
+
+NGSolveの`SparseMatrix<SCAL>`はCSR的な内部構造を持つ。
+`SparseSolvPrecondBase::prepare_matrix_view()`がこれをSparseSolvの
+`SparseMatrixView<SCAL>`にデータコピーなしで変換する。
+
+FreeDofs処理: 拘束DOFの行は単位行（対角=1、非対角=0）に置換される。
+
+```cpp
+// sparsesolv_precond.hpp: SparseSolvPrecondBase::prepare_matrix_view()
+if (!freedofs_->Test(i)) {
+    modified_values_[k] = (j == i) ? SCAL(1) : SCAL(0);  // identity row
+} else if (!freedofs_->Test(j)) {
+    modified_values_[k] = SCAL(0);  // zero coupling to constrained DOF
+}
+```
+
+#### SparseSolvPrecondBase（BaseMatrixラッパー）
+
+すべての前処理の基底クラス。NGSolveの`BaseMatrix`を継承し、
+NGSolveの`CGSolver`との互換性のために`Mult()` / `MultAdd()`を実装する。
+
+```
+SparseSolvPrecondBase<SCAL>  （抽象基底）
+├── SparseSolvICPreconditioner<SCAL>    → ICPreconditioner<SCAL>
+├── SparseSolvSGSPreconditioner<SCAL>   → SGSPreconditioner<SCAL>
+└── SparseSolvSolver<SCAL>              → ICCG/SGSMRTR/CG
+
+CompactAMS  （BaseMatrixを直接継承）
+  → 実数HCurl AMS前処理（静磁場、Update()対応）
+  → Python: CompactAMSPreconditionerImpl
+
+ComplexCompactAMS  （BaseMatrixを直接継承）
+  → 複素渦電流向け融合Re/Im AMS前処理（Update()対応）
+  → Python: ComplexCompactAMSPreconditionerImpl
+```
+
+非線形ソルバーへの対応（Update()）:
+- `Update()`: 現在の行列で前処理を再構築（幾何情報は保持）
+- `Update(new_mat)`: 新しい行列で前処理を再構築
+- 幾何情報（G行列、Pi行列、転置行列）は初回構築時のみ計算される
+
+#### Pythonファクトリ関数（自動ディスパッチ）
+
+`sparsesolv_python_export.hpp`のファクトリ関数は行列の型を自動判定し、
+適切なテンプレートインスタンスを生成する:
+
+```cpp
+// ICPreconditioner factory
+m.def("ICPreconditioner", [](shared_ptr<BaseMatrix> mat, ...) {
+    if (mat->IsComplex()) {
+        // → SparseSolvICPreconditioner<Complex>
+    } else {
+        // → SparseSolvICPreconditioner<double>
+    }
+});
+```
+
+#### 型登録 (AMS)
+
+CompactAMS / ComplexCompactAMSは`py::class_`で具象型を登録し、
+ファクトリ関数が具象型を返すことで、Pythonから`Update()`にアクセス可能になる:
+
+```cpp
+// 型登録
+py::class_<CompactAMS, shared_ptr<CompactAMS>, BaseMatrix>
+    (m, "CompactAMSPreconditionerImpl")
+    .def("Update", py::overload_cast<>(&CompactAMS::Update))
+    .def("Update", py::overload_cast<shared_ptr<SparseMatrix<double>>>(&CompactAMS::Update));
+
+// ファクトリ（具象型を返す）
+m.def("CompactAMSPreconditioner", [...] -> shared_ptr<CompactAMS> { ... });
+```
+
+アルゴリズムの詳細は[algorithms.md](algorithms.md)を参照。
+
+---
+
+## ビルド手順
+
+### 前提条件
+
+- NGSolve（ソースビルドまたはpip install）+ CMake設定ファイル
+- CMake 3.16以上
+- C++17対応コンパイラ（MSVC 2022、GCC 10+、Clang 10+）
+- pybind11（CMakeが自動取得）
+
+### ビルドコマンド
 
 ```bash
 git clone https://github.com/ksugahar/ngsolve-sparsesolv.git
@@ -22,7 +212,7 @@ cmake .. -DSPARSESOLV_BUILD_NGSOLVE=ON \
 cmake --build . --config Release
 ```
 
-**When using Intel MKL** (BLAS used internally by CompactAMG/AMS):
+**Intel MKL使用時**（CompactAMG/AMS内部で使用するBLAS）:
 
 ```bash
 cmake .. -DSPARSESOLV_BUILD_NGSOLVE=ON \
@@ -30,10 +220,10 @@ cmake .. -DSPARSESOLV_BUILD_NGSOLVE=ON \
          -DCMAKE_PREFIX_PATH="C:/Program Files (x86)/Intel/oneAPI/mkl/latest"
 ```
 
-### Installation
+### インストール
 
 ```bash
-# Copy to NGSolve site-packages
+# NGSolveのsite-packagesにコピー
 SITE_PACKAGES=$(python -c "import ngsolve, pathlib; print(pathlib.Path(ngsolve.__file__).parent.parent)")
 mkdir -p "$SITE_PACKAGES/sparsesolv_ngsolve"
 cp build/Release/sparsesolv_ngsolve*.pyd "$SITE_PACKAGES/sparsesolv_ngsolve/"
@@ -42,80 +232,80 @@ echo "from .sparsesolv_ngsolve import *" > "$SITE_PACKAGES/sparsesolv_ngsolve/__
 
 ---
 
-## Running Tests
+## テストの実行
 
 ```bash
 python -m pytest tests/test_sparsesolv.py -v --tb=short
 ```
 
-Test structure:
-- `test_sparsesolv.py`: Solver and preconditioner tests (46 cases)
-  - ICCG, SGSMRTR, CG, IC, SGS for various problems
-  - 2D/3D, H1/VectorH1/HCurl, real/complex
-  - ABMC ordering, diagonal scaling, auto-shift
+テスト構成:
+- `test_sparsesolv.py`: ソルバーおよび前処理のテスト（46ケース）
+  - ICCG、SGSMRTR、CG、IC、SGS（各種問題に対して）
+  - 2D/3D、H1/VectorH1/HCurl、実数/複素数
+  - ABMC順序付け、対角スケーリング、自動シフト
 
 ---
 
-## Past Bugs and Lessons Learned
+## 過去のバグと教訓
 
-### 1. DenseMatrix P^T Bug
+### 1. DenseMatrixのP^Tバグ
 
-**Problem**: In the dense LU inverse, the permutation matrix was constructed as P^T instead of P.
+**問題**: 密行列LU逆行列において、置換行列がPではなくP^Tとして構築されていた。
 
 ```cpp
-// Wrong (P^T):
+// 誤り (P^T):
 inv(piv[j], j) = Scalar(1);
 
-// Correct (P):
+// 正解 (P):
 inv(k, piv[k]) = Scalar(1);
 ```
 
-**Lesson**: In PA = LU, P is the matrix that "moves row k to row piv[k]".
-The correct construction is P[k, piv[k]] = 1.
+**教訓**: PA = LU において、Pは「行kを行piv[k]に移動する」行列である。
+正しい構築は P[k, piv[k]] = 1 となる。
 
-### 2. Complex Inner Product (Non-conjugate vs Conjugate)
+### 2. 複素内積（非共役と共役）
 
-**Problem**: The CG solver was using the conjugate inner product `std::conj(a[i]) * b[i]`.
+**問題**: CGソルバーが共役内積 `std::conj(a[i]) * b[i]` を使用していた。
 
-FEM matrices are **complex-symmetric** (A^T = A), not Hermitian (A^H = A).
-Example: the eddy current equation curl-curl + i*sigma*mass.
+FEM行列は**複素対称**（A^T = A）であり、エルミート（A^H = A）ではない。
+例: 渦電流方程式 curl-curl + i*sigma*mass。
 
 ```cpp
-// Wrong (for Hermitian matrices):
+// 誤り（エルミート行列向け）:
 sum += std::conj(a[i]) * b[i];
 
-// Correct (for complex-symmetric matrices):
+// 正解（複素対称行列向け）:
 sum += a[i] * b[i];
 ```
 
-**Symptom**: Divergence after 5000 iterations on eddy current problems.
-After the fix: convergence in 58 iterations.
+**症状**: 渦電流問題で5000回反復しても発散。
+修正後: 58回で収束。
 
-**Lesson**: Always use the non-conjugate inner product for complex FEM problems.
-This corresponds to NGSolve's `CGSolver(conjugate=False)`.
+**教訓**: 複素FEM問題では常に非共役内積を使用すること。
+これはNGSolveの`CGSolver(conjugate=False)`に対応する。
 
-### 3. SGS-MRTR Complex Comparison
+### 3. SGS-MRTRの複素比較
 
-**Problem**: The zeta calculation in SGS-MRTR used `denom >= 0`, but
-`std::complex<double>` does not have a `>=` operator.
+**問題**: SGS-MRTRのzeta計算で`denom >= 0`を使用していたが、
+`std::complex<double>`には`>=`演算子が存在しない。
 
 ```cpp
-// Fixed:
+// 修正後:
 denom = (std::real(denom) >= 0) ? ... : ...;
 ```
 
 ---
 
-## NGSolve API Notes
+## NGSolve APIに関する注意事項
 
 ### AutoVector
 
-NGSolve's `BaseVector::CreateVector()` returns an `AutoVector`.
-It has shared_ptr-like semantics but with its own move/copy conventions.
+NGSolveの`BaseVector::CreateVector()`は`AutoVector`を返す。
+shared_ptrに似たセマンティクスを持つが、独自のムーブ/コピー規約がある。
 
 ### CalcElementMatrix
 
-Computing element matrices requires a `LocalHeap`:
+要素行列の計算には`LocalHeap`が必要:
 
 ```cpp
 LocalHeap lh(10000000, "name", true);  // mult_by_threads=true
@@ -131,21 +321,21 @@ IterateElements(*fes, VOL, lh,
 
 ### IsRegularDof
 
-An element's DOF list may contain invalid DOFs (< 0).
-Use `IsRegularDof(dnum)` to filter them:
+要素のDOFリストには無効なDOF（< 0）が含まれる場合がある。
+`IsRegularDof(dnum)`でフィルタする:
 
 ```cpp
 auto dnums = el.GetDofs();
 for (int i = 0; i < dnums.Size(); ++i) {
     if (IsRegularDof(dnums[i])) {
-        // Valid DOF
+        // 有効なDOF
     }
 }
 ```
 
 ---
 
-## References
+## 参考文献
 
 1. J. A. Meijerink, H. A. van der Vorst,
    "An Iterative Solution Method for Linear Systems of Which the

@@ -1,150 +1,147 @@
-# SparseSolv — Header-only AMS Preconditioner for NGSolve HCurl Problems
+# SparseSolv — NGSolve HCurl問題向けヘッダオンリーAMS前処理
 
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
 
-**60x fewer iterations than ICCG on eddy current problems. No external dependencies.**
+**渦電流問題でICCGの60倍少ない反復回数。外部依存なし。**
 
-A header-only C++17 iterative solver library for [NGSolve](https://ngsolve.org/) finite element analysis.
-Provides Compact AMS preconditioning for HCurl curl-curl problems (magnetostatics and eddy current),
-IC/SGS preconditioners with ABMC parallel triangular solves, and COCR/GMRES Krylov solvers.
+[NGSolve](https://ngsolve.org/) 有限要素解析向けのヘッダオンリーC++17反復法ソルバーライブラリ。
+HCurl curl-curl問題（静磁界・渦電流）向けのCompact AMS前処理、
+IC/SGS前処理＋ABMC並列三角求解、COCR/GMRESクリロフソルバーを提供。
 
-Supports both `double` and `std::complex<double>`, and is provided as a pybind11 extension module (`sparsesolv_ngsolve`) independent of the NGSolve source tree.
+`double` と `std::complex<double>` の両方に対応し、NGSolveソースツリーから独立した
+pybind11拡張モジュール (`sparsesolv_ngsolve`) として提供。
 
-Fork of [JP-MARs/SparseSolv](https://github.com/JP-MARs/SparseSolv).
+[JP-MARs/SparseSolv](https://github.com/JP-MARs/SparseSolv) からのフォーク。
 
-## Key Features
+## 主な特徴
 
-1. **ICCG** -- Conjugate gradient method with incomplete Cholesky (IC) preconditioning. Handles semi-definite matrices (curl-curl) via auto-shift. Supports complex symmetric matrices (unconjugated inner product)
-2. **ABMC Parallelization** -- Parallel incomplete Cholesky triangular solve using Algebraic Block Multi-Color (ABMC) ordering [Iwashita et al. 2012]
-3. **Compact AMS + COCR** -- Auxiliary space preconditioning + Krylov solver for HCurl problems. No external dependencies (header-only C++). Supports both real (magnetostatics + CG) and complex (eddy current + COCR). Supports nonlinear solvers (Newton iteration) via `Update()`
+1. **ICCG** — 不完全コレスキー(IC)前処理付き共役勾配法。auto-shiftによる半正定値行列（curl-curl）対応。複素対称行列（非共役内積）対応
+2. **ABMC並列化** — ABMC (Algebraic Block Multi-Color) 順序付け [Iwashita et al. 2012] による並列不完全コレスキー三角求解
+3. **Compact AMS + COCR** — HCurl問題向け補助空間前処理＋クリロフソルバー。外部依存なし（ヘッダオンリーC++）。実数（静磁界＋CG）・複素数（渦電流＋COCR）対応。`Update()` による非線形ソルバー（ニュートン反復）対応
 
-## Why SparseSolv?
+## なぜSparseSolv？
 
-NGSolve includes direct solvers and built-in BDDC. SparseSolv adds functionality that NGSolve does not provide by default:
+NGSolveは直接法とBDDCを内蔵しているが、SparseSolvはNGSolveが標準提供しない機能を追加する：
 
-1. **IC preconditioning + auto-shift** -- Curl-curl FEM matrices are semi-definite, and standard IC decomposition breaks down. SparseSolv's auto-shift IC detects breakdown and adjusts automatically
+1. **IC前処理 + auto-shift** — curl-curl FEM行列は半正定値であり、通常のIC分解は破綻する。SparseSolvのauto-shift ICは破綻を検知し自動的にシフトを増加
+2. **ABMC並列三角求解** — IC前処理の三角求解は本質的に逐次的である。ABMC順序付けがこのボトルネックを除去し、並列前進・後退代入を実現 [Iwashita et al. 2012]
+3. **Compact AMS + COCR** — 補助空間前処理 (Hiptmair-Xu 2007) とCOCRクリロフソルバー (Sogabe-Zhang 2007) の組合せ。HCurl有限要素による複素渦電流問題 (A = K + jω·σ·M) 向け。詳細は [docs/compact_ams_cocr.md](docs/compact_ams_cocr.md) を参照
 
-2. **ABMC parallel triangular solve** -- The triangular solve in IC preconditioning is inherently sequential. ABMC ordering eliminates this bottleneck and enables parallel forward/backward substitution [Iwashita et al. 2012]
+## ソルバー選択指針
 
-3. **Compact AMS + COCR** -- A combination of auxiliary space preconditioning (Hiptmair-Xu 2007) and the COCR Krylov solver (Sogabe-Zhang 2007) for complex eddy current problems with HCurl finite elements (A = K + jw*sigma*M). See [docs/compact_ams_cocr.md](docs/compact_ams_cocr.md) for details
+| 問題 | 有限要素空間 | 推奨手法 | 理由 |
+|------|------------|---------|------|
+| ポアソン方程式 | H1 | **ICCG** | メモリ効率が高く高速 |
+| Curl-curl（実数） | HCurl (`nograds=True`) | **Shifted-ICCG** | auto-shift ICで半正定値対応 |
+| 静磁界（実数・大規模） | HCurl (実数, p=1) | **Compact AMS + CG** | メッシュサイズに依存しない反復回数 |
+| 静磁界（非線形） | HCurl (実数) | **Compact AMS + CG** | `Update()` でニュートン反復対応 |
+| 渦電流（複素・大規模） | HCurl (複素, p=1) | **Compact AMS + COCR** | メッシュサイズに依存しない反復回数 |
+| 渦電流（複素・中小規模） | HCurl (複素) | **ICCG** (`conjugate=False`) | メモリ効率が高い |
 
-## Solver Selection Guide
+## 性能
 
-| Problem | Finite Element Space | Recommended Method | Reason |
-|---------|---------------------|-------------------|--------|
-| Poisson | H1 | **ICCG** | Memory-efficient and fast |
-| Curl-curl (real) | HCurl (`nograds=True`) | **Shifted-ICCG** | Handles semi-definite systems via auto-shift IC |
-| Magnetostatics (real, large-scale) | HCurl (real, p=1) | **Compact AMS + CG** | Iteration count stable with respect to mesh size |
-| Magnetostatics (nonlinear) | HCurl (real) | **Compact AMS + CG** | Supports Newton iteration via `Update()` |
-| Eddy current (complex, large-scale) | HCurl (complex, p=1) | **Compact AMS + COCR** | Iteration count stable with respect to mesh size |
-| Eddy current (complex, small-medium scale) | HCurl (complex) | **ICCG** (`conjugate=False`) | Memory-efficient |
+### Compact AMS + COCR（複素渦電流）
 
-## Performance
+比留間渦電流問題（銅コイル＋鉄心 μ_r=1000、30 kHz、tol=1e-10）。
+**環境**: Intel Xeon (8コア)、Windows Server 2022、MSVC 2022、MKL 2024.2。
 
-### Compact AMS + COCR (Complex Eddy Current)
-
-Hiruma eddy current problem (copper coil + iron core mu_r=1000, 30 kHz, tol=1e-10).
-**Environment**: Intel Xeon (8 cores), Windows Server 2022, MSVC 2022, MKL 2024.2.
-
-| Mesh | HCurl DOFs | Iterations | Time | ms/iter | Memory |
-|------|----------:|-----------:|-----:|--------:|-------:|
+| メッシュ | HCurl自由度 | 反復回数 | 時間 | ms/反復 | メモリ |
+|---------|----------:|---------:|----:|-------:|------:|
 | mesh1_2.5T | 155,527 | 144 | 4.5s | 25.8 | 368 MB |
 | mesh1_3.5T | 197,395 | 168 | 7.3s | 37.7 | 460 MB |
 | mesh1_5.5T | 331,595 | 249 | 16.2s | 57.3 | 725 MB |
 | mesh1_20.5T | 1,441,102 | 499 | 222.6s | 396.2 | 2,933 MB |
 
-Comparison with ABMC-ICCG (IC preconditioning only) on mesh1_3.5T (197k DOFs):
+ABMC-ICCG（IC前処理のみ）との比較（mesh1_3.5T、197k自由度）：
 
-| Method | Iterations | Time | Status |
-|--------|----------:|-----:|--------|
-| Compact AMS + COCR | 168 | 7.2s | Converged |
-| ABMC-ICCG | 17,178 | 438.4s | Not converged (res=2.8e-10) |
+| 手法 | 反復回数 | 時間 | 状態 |
+|------|--------:|----:|------|
+| Compact AMS + COCR | 168 | 7.2s | 収束 |
+| ABMC-ICCG | 17,178 | 438.4s | 非収束 (残差=2.8e-10) |
 
-IC preconditioning cannot handle the curl-curl null space in HCurl discretization.
-AMS resolves this through discrete gradient correction and Nedelec interpolation correction.
+IC前処理はHCurl離散化のcurl-curl零空間を扱えない。
+AMSは離散勾配補正とNedelec補間補正によりこれを解決する。
 
-Run benchmarks: `python examples/hiruma/bench_compact_ams.py --all`
+ベンチマーク実行: `python examples/hiruma/bench_compact_ams.py --all`
 
 ### ABMC ICCG
 
-3D HCurl curl-curl problem (148K DOFs, order 2, 8 threads):
+3D HCurl curl-curl問題（148K自由度、次数2、8スレッド）：
 
-| Solver | Iterations | Time | vs ICCG |
-|--------|-----------|------|---------|
+| ソルバー | 反復回数 | 時間 | vs ICCG |
+|---------|---------|------|---------|
 | ICCG | 463 | 4.4 s | 1.0x |
-| ICCG + ABMC (8 colors) | 414 | 2.6 s | **1.7x** |
+| ICCG + ABMC (8色) | 414 | 2.6 s | **1.7x** |
 
-## Documentation
+## ドキュメント
 
-Detailed documentation is available in [docs/](docs/):
-- [Architecture](docs/architecture.md) -- Source code structure and design
-- [Algorithms](docs/algorithms.md) -- Algorithm descriptions (IC, SGS-MRTR, CG, ABMC)
-- [Compact AMS + COCR](docs/compact_ams_cocr.md) -- Auxiliary space preconditioning for complex eddy current problems
-- [ABMC Implementation Guide](docs/abmc_implementation_details.md) -- Parallel triangular solve, performance analysis
-- [API Reference](docs/api_reference.md) -- Python API reference
-- [Tutorials](docs/tutorials.md) -- Practical examples
-- [Developer Information](docs/development.md) -- Build, testing, and development notes
+詳細なドキュメントは [docs/](docs/) にある：
+- [Compact AMS + COCR](docs/compact_ams_cocr.md) — 複素渦電流問題向け補助空間前処理
+- [アルゴリズム](docs/algorithms.md) — アルゴリズム詳説（IC、SGS-MRTR、CG、ABMC、Compact AMS）
+- [APIリファレンス](docs/api_reference.md) — Python API
+- [チュートリアル](docs/tutorials.md) — 実用例
+- [開発者情報](docs/development.md) — ビルド、テスト、アーキテクチャ
 
-## Features
+## 機能
 
-### Preconditioners
-- **Compact AMS** (Auxiliary-space Maxwell Solver) -- Auxiliary space preconditioning for HCurl. Header-only C++ implementation of the Hiptmair-Xu (2007) algorithm. No external dependencies
-  - `CompactAMSPreconditioner`: For real HCurl (magnetostatics), used with CG solver
-  - `ComplexCompactAMSPreconditioner`: For complex eddy current, fused Re/Im processing
-  - `Update()`: Supports nonlinear solvers (Newton iteration). Retains geometric information and rebuilds only matrix-dependent parts
-  - CompactAMG: PMIS coarsening + l1-Jacobi + V-cycle, DualMult fusion
-- **IC** (Incomplete Cholesky) -- Shifted IC(0), auto-shift for semi-definite matrices
-- **SGS** (Symmetric Gauss-Seidel) -- No factorization required
+### 前処理
+- **Compact AMS** (Auxiliary-space Maxwell Solver) — HCurl向け補助空間前処理。Hiptmair-Xu (2007) アルゴリズムのヘッダオンリーC++実装。外部依存なし
+  - `CompactAMSPreconditioner`: 実数HCurl（静磁界）向け、CGソルバーと併用
+  - `ComplexCompactAMSPreconditioner`: 複素渦電流向け、Re/Im融合処理
+  - `Update()`: 非線形ソルバー（ニュートン反復）対応。幾何情報を保持し行列依存部分のみ再構築
+  - CompactAMG: PMISコースニング + l1-ヤコビ + Vサイクル、DualMult融合
+- **IC** (不完全コレスキー) — シフト付きIC(0)、半正定値行列向けauto-shift
+- **SGS** (対称ガウスザイデル) — 分解不要
 
-### Iterative Solvers
-- **COCR** (Conjugate Orthogonal Conjugate Residual) -- Short-recurrence Krylov solver for complex symmetric systems (A^T=A) [Sogabe-Zhang 2007]. O(n) memory, no restart required
-- **CG** (Conjugate Gradient) -- For SPD systems, supports complex symmetric (`conjugate=False`)
-- **SGS-MRTR** -- MRTR with built-in split formula
+### 反復法ソルバー
+- **COCR** (Conjugate Orthogonal Conjugate Residual) — 複素対称系（A^T=A）向け短漸化式クリロフソルバー [Sogabe-Zhang 2007]。O(n)メモリ、リスタート不要
+- **CG** (共役勾配法) — SPD系向け、複素対称（`conjugate=False`）対応
+- **SGS-MRTR** — 分割公式内蔵MRTR法
 
-### Combined Methods
-- **Compact AMS + COCR** -- For complex eddy current (large-scale HCurl p=1)
-- **ICCG** -- CG + IC preconditioning (optional ABMC parallel triangular solve)
-- **SGSMRTR** -- SGS-MRTR (self-contained)
+### 組合せ手法
+- **Compact AMS + COCR** — 複素渦電流（大規模HCurl p=1）向け
+- **ICCG** — CG + IC前処理（ABMC並列三角求解オプション）
+- **SGSMRTR** — SGS-MRTR（自己完結型）
 
-### Advanced Features
-- Auto-shift IC decomposition for semi-definite matrices (curl-curl problems)
-- Condition number improvement via diagonal scaling
-- Parallel triangular solve using ABMC (Algebraic Block Multi-Color) ordering
-- Numerical breakdown detection and convergence-aware recovery
-- Best-result tracking (returns best iterate when not converged)
+### 高度な機能
+- 半正定値行列（curl-curl問題）向けauto-shift IC分解
+- 対角スケーリングによる条件数改善
+- ABMC (Algebraic Block Multi-Color) 順序付けによる並列三角求解
+- 数値的破綻検知と収束ベスト結果復元
+- ベスト結果追跡（非収束時にベスト反復結果を返却）
 
-### Parallelization
+### 並列化
 
-All parallel processing is dispatched at compile time via `core/parallel.hpp`:
+すべての並列処理は `core/parallel.hpp` によりコンパイル時にディスパッチ：
 
-| Build Configuration | Backend | Use Case |
-|--------------------|---------|----------|
-| `SPARSESOLV_USE_NGSOLVE_TASKMANAGER` | NGSolve TaskManager (`ngcore::ParallelFor/ParallelReduce`) | NGSolve integration |
-| `_OPENMP` | OpenMP `#pragma omp parallel for` | Standalone + OpenMP |
-| (neither) | Serial execution | Standalone (no threads) |
+| ビルド設定 | バックエンド | 用途 |
+|-----------|------------|------|
+| `SPARSESOLV_USE_NGSOLVE_TASKMANAGER` | NGSolve TaskManager (`ngcore::ParallelFor/ParallelReduce`) | NGSolve統合 |
+| `_OPENMP` | OpenMP `#pragma omp parallel for` | スタンドアロン + OpenMP |
+| （なし） | 逐次実行 | スタンドアロン（スレッドなし） |
 
-## Installation
+## インストール
 
-### Pre-built Wheel (Recommended)
+### ビルド済みWheel（推奨）
 
-Download the platform-appropriate `.whl` file from the [Releases](https://github.com/ksugahar/ngsolve-sparsesolv/releases) page and install:
+[Releases](https://github.com/ksugahar/ngsolve-sparsesolv/releases) ページからプラットフォームに合った `.whl` ファイルをダウンロードしてインストール：
 
 ```bash
 pip install sparsesolv_ngsolve-2.6.0-cp312-cp312-win_amd64.whl
 ```
 
-Adjust the filename to match your Python version and OS.
+ファイル名はPythonバージョンとOSに合わせて変更すること。
 
-### Build from Source
+### ソースからビルド
 
-Requires [Git for Windows](https://gitforwindows.org/) (or equivalent), CMake 3.16+,
-a C++17 compiler, and NGSolve (`pip install ngsolve` or source build).
+[Git for Windows](https://gitforwindows.org/)（または同等品）、CMake 3.16+、
+C++17コンパイラ、NGSolve（`pip install ngsolve` またはソースビルド）が必要。
 
 ```bash
 pip install git+https://github.com/ksugahar/ngsolve-sparsesolv.git
 ```
 
-Or clone and build locally:
+または、クローンしてローカルビルド：
 
 ```bash
 git clone https://github.com/ksugahar/ngsolve-sparsesolv.git
@@ -152,17 +149,17 @@ cd ngsolve-sparsesolv
 pip install .
 ```
 
-For development builds (editable install, manual CMake), see [docs/development.md](docs/development.md).
+開発ビルド（editable install、手動CMake）については [docs/development.md](docs/development.md) を参照。
 
-### Verification
+### 動作確認
 
 ```bash
 python -c "from sparsesolv_ngsolve import SparseSolvSolver; print('OK')"
 ```
 
-## Usage with NGSolve
+## NGSolveでの使用
 
-### Quick Start (ICCG)
+### クイックスタート（ICCG）
 
 ```python
 from ngsolve import *
@@ -186,10 +183,10 @@ solver = SparseSolvSolver(a.mat, method="ICCG",
 gfu.vec.data = solver * f.vec
 ```
 
-### ABMC-Parallelized ICCG
+### ABMC並列化ICCG
 
 ```python
-# Parallelize IC preconditioning triangular solve with ABMC
+# ABMC順序付けによるIC前処理三角求解の並列化
 solver = SparseSolvSolver(a.mat, method="ICCG",
                           freedofs=fes.FreeDofs(), tol=1e-10,
                           use_abmc=True,
@@ -198,14 +195,14 @@ solver = SparseSolvSolver(a.mat, method="ICCG",
 gfu.vec.data = solver * f.vec
 ```
 
-### Compact AMS + COCR (Complex Eddy Current)
+### Compact AMS + COCR（複素渦電流）
 
 ```python
 import sparsesolv_ngsolve as ssn
 from ngsolve import *
 
-# Assemble complex system A = K + jw*sigma*M (omitted)
-# Build real SPD auxiliary matrix
+# 複素系 A = K + jω·σ·M のアセンブル（省略）
+# 実数SPD補助行列の構築
 fes_real = HCurl(mesh, order=1, nograds=True,
                  dirichlet="dirichlet", complex=False)
 u_r, v_r = fes_real.TnT()
@@ -215,13 +212,13 @@ a_real += 1e-6 * nu_cf * u_r * v_r * dx
 a_real += abs(omega) * sigma_cf * u_r * v_r * dx("cond")
 a_real.Assemble()
 
-# Discrete gradient matrix and vertex coordinates
+# 離散勾配行列と頂点座標
 G_mat, h1_fes = fes_real.CreateGradient()
 coord_x = [mesh.ngmesh.Points()[i+1][0] for i in range(mesh.nv)]
 coord_y = [mesh.ngmesh.Points()[i+1][1] for i in range(mesh.nv)]
 coord_z = [mesh.ngmesh.Points()[i+1][2] for i in range(mesh.nv)]
 
-# Compact AMS preconditioner + COCR solver
+# Compact AMS前処理 + COCRソルバー
 pre = ssn.ComplexCompactAMSPreconditioner(
     a_real_mat=a_real.mat, grad_mat=G_mat,
     freedofs=fes_real.FreeDofs(),
@@ -237,65 +234,65 @@ with TaskManager():
 print(f"Converged in {inv.iterations} iterations")
 ```
 
-See [docs/compact_ams_cocr.md](docs/compact_ams_cocr.md) for details.
+詳細は [docs/compact_ams_cocr.md](docs/compact_ams_cocr.md) を参照。
 
-### Preconditioner + NGSolve CGSolver
+### 前処理 + NGSolve CGSolver
 
 ```python
 from sparsesolv_ngsolve import ICPreconditioner, SGSPreconditioner
 from ngsolve.krylovspace import CGSolver
 
-# IC preconditioner + NGSolve CG
+# IC前処理 + NGSolve CG
 pre = ICPreconditioner(a.mat, freedofs=fes.FreeDofs(), shift=1.05)
 inv = CGSolver(a.mat, pre, tol=1e-10, maxiter=2000)
 gfu.vec.data = inv * f.vec
 ```
 
-### SparseSolvSolver Parameters
+### SparseSolvSolverパラメータ
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `method` | str | `"ICCG"` | Solver method: `ICCG`, `SGSMRTR`, `CG`, `COCR` |
-| `tol` | float | `1e-10` | Convergence tolerance |
-| `maxiter` | int | `1000` | Maximum number of iterations |
-| `shift` | float | `1.05` | IC shift parameter (stability) |
-| `auto_shift` | bool | `False` | Automatic shift increase on IC breakdown |
-| `diagonal_scaling` | bool | `False` | Diagonal scaling |
-| `save_best_result` | bool | `True` | Track and restore best iterate |
-| `conjugate` | bool | `False` | Conjugated inner product for Hermitian systems |
-| `use_abmc` | bool | `False` | Parallel triangular solve via ABMC ordering |
-| `abmc_block_size` | int | `4` | Number of rows per ABMC block |
-| `abmc_num_colors` | int | `4` | Target number of ABMC colors |
+| パラメータ | 型 | デフォルト | 説明 |
+|-----------|------|---------|------|
+| `method` | str | `"ICCG"` | ソルバー手法: `ICCG`, `SGSMRTR`, `CG`, `COCR` |
+| `tol` | float | `1e-10` | 収束判定閾値 |
+| `maxiter` | int | `1000` | 最大反復回数 |
+| `shift` | float | `1.05` | ICシフトパラメータ（安定化） |
+| `auto_shift` | bool | `False` | IC破綻時の自動シフト増加 |
+| `diagonal_scaling` | bool | `False` | 対角スケーリング |
+| `save_best_result` | bool | `True` | ベスト反復結果の追跡・復元 |
+| `conjugate` | bool | `False` | エルミート系向け共役内積 |
+| `use_abmc` | bool | `False` | ABMC順序付けによる並列三角求解 |
+| `abmc_block_size` | int | `4` | ABMCブロック当たりの行数 |
+| `abmc_num_colors` | int | `4` | ABMC目標色数 |
 
-### Python Class List
+### Pythonクラス一覧
 
 ```python
 from sparsesolv_ngsolve import (
-    # Compact AMS preconditioners (for HCurl, supports Update())
-    CompactAMSPreconditioner,      # Real HCurl (magnetostatics) + CG
-    ComplexCompactAMSPreconditioner,   # Complex eddy current, fused Re/Im + COCR
+    # Compact AMS前処理（HCurl向け、Update()対応）
+    CompactAMSPreconditioner,      # 実数HCurl（静磁界）+ CG
+    ComplexCompactAMSPreconditioner,   # 複素渦電流、Re/Im融合 + COCR
 
-    # IC/SGS preconditioners
-    ICPreconditioner,              # For use with NGSolve CGSolver
-    SGSPreconditioner,             # For use with NGSolve CGSolver
+    # IC/SGS前処理
+    ICPreconditioner,              # NGSolve CGSolverと併用
+    SGSPreconditioner,             # NGSolve CGSolverと併用
 
-    # Solvers
-    SparseSolvSolver,              # Combined solver (ICCG, SGSMRTR)
-    COCRSolver,                    # COCR (complex symmetric systems, native C++)
-    GMRESSolver,                   # GMRES (non-symmetric systems, for AMS preconditioning)
-    SparseSolvResult,              # Solve result
+    # ソルバー
+    SparseSolvSolver,              # 統合ソルバー (ICCG, SGSMRTR)
+    COCRSolver,                    # COCR（複素対称系、C++ネイティブ）
+    GMRESSolver,                   # GMRES（非対称系、左前処理）
+    SparseSolvResult,              # 解結果
 )
 ```
 
-## Standalone Usage (C++)
+## スタンドアロン使用（C++）
 
 ```cpp
 #include <sparsesolv/sparsesolv.hpp>
 
-// Create CSR matrix view (zero-copy)
+// CSR行列ビューの作成（ゼロコピー）
 sparsesolv::SparseMatrixView<double> A(rows, cols, row_ptr, col_idx, values);
 
-// Solve with ICCG
+// ICCGで求解
 sparsesolv::SolverConfig config;
 config.tolerance = 1e-10;
 config.max_iterations = 1000;
@@ -303,37 +300,37 @@ config.max_iterations = 1000;
 auto result = sparsesolv::solve_iccg(A, b, x, size, config);
 ```
 
-## Directory Structure
+## ディレクトリ構成
 
 ```
 ngsolve-sparsesolv/
-├── docs/                        # Documentation
-├── include/sparsesolv/         # Header-only library
-│   ├── sparsesolv.hpp          # Main header
-│   ├── core/                   # Types, configuration, matrix views
-│   │   ├── parallel.hpp        # Parallelization abstraction layer (TaskManager/OpenMP/serial)
-│   │   └── abmc_ordering.hpp   # ABMC ordering
-│   ├── preconditioners/        # IC, SGS, Compact AMS implementations
-│   │   ├── ic_preconditioner.hpp          # Incomplete Cholesky (auto-shift)
-│   │   ├── sgs_preconditioner.hpp         # Symmetric Gauss-Seidel
-│   │   ├── compact_amg.hpp                # Classical AMG (PMIS, l1-Jacobi, DualMult)
-│   │   ├── compact_ams.hpp                # AMS preconditioner (Hiptmair-Xu 2007)
-│   │   └── complex_compact_ams.hpp        # Fused Re/Im ComplexCompactAMS
-│   ├── solvers/                # CG, COCR, SGS-MRTR implementations
-│   └── ngsolve/                # NGSolve BaseMatrix wrapper + pybind11
+├── docs/                        # ドキュメント
+├── include/sparsesolv/         # ヘッダオンリーライブラリ
+│   ├── sparsesolv.hpp          # メインヘッダ
+│   ├── core/                   # 型定義、設定、行列ビュー
+│   │   ├── parallel.hpp        # 並列化抽象層 (TaskManager/OpenMP/逐次)
+│   │   └── abmc_ordering.hpp   # ABMC順序付け
+│   ├── preconditioners/        # IC, SGS, Compact AMS実装
+│   │   ├── ic_preconditioner.hpp          # 不完全コレスキー (auto-shift)
+│   │   ├── sgs_preconditioner.hpp         # 対称ガウスザイデル
+│   │   ├── compact_amg.hpp                # 古典的AMG (PMIS, l1-ヤコビ, DualMult)
+│   │   ├── compact_ams.hpp                # AMS前処理 (Hiptmair-Xu 2007)
+│   │   └── complex_compact_ams.hpp        # Re/Im融合ComplexCompactAMS
+│   ├── solvers/                # CG, COCR, SGS-MRTR実装
+│   └── ngsolve/                # NGSolve BaseMatrixラッパー + pybind11
 ├── examples/
-│   └── hiruma/                 # Eddy current benchmark (30 kHz)
-│       ├── bench_compact_ams.py    # Compact AMS + COCR benchmark
-│       ├── bench_ams_vs_abmc.py    # AMS vs ABMC-ICCG comparison
-│       └── eddy_current.py         # Eddy current analysis
+│   └── hiruma/                 # 渦電流ベンチマーク (30 kHz)
+│       ├── bench_compact_ams.py    # Compact AMS + COCRベンチマーク
+│       ├── bench_ams_vs_abmc.py    # AMS vs ABMC-ICCG比較
+│       └── eddy_current.py         # 渦電流解析
 ├── tests/
-│   └── test_sparsesolv.py      # Solver and preconditioner tests
-├── sparsesolv_ngsolve.pyi      # Python type stubs
+│   └── test_sparsesolv.py      # ソルバー・前処理テスト
+├── sparsesolv_ngsolve.pyi      # Python型スタブ
 ├── CMakeLists.txt
 └── LICENSE
 ```
 
-## References
+## 参考文献
 
 1. T. Iwashita, H. Nakashima, Y. Takahashi,
    "Algebraic Block Multi-Color Ordering Method for Parallel Multi-Threaded
@@ -361,6 +358,6 @@ ngsolve-sparsesolv/
 6. JP-MARs/SparseSolv,
    https://github.com/JP-MARs/SparseSolv
 
-## License
+## ライセンス
 
-This project is licensed under the [Mozilla Public License 2.0](LICENSE).
+[Mozilla Public License 2.0](LICENSE) のもとで提供。

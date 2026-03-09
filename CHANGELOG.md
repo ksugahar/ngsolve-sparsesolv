@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.1] - 2026-03-10
+
+### Changed
+- Translated all documentation (README + docs/) to Japanese
+- Consolidated docs from 10 files to 6 files:
+  - Merged `docs/benchmarks.md` into `docs/compact_ams_cocr.md`
+  - Merged `docs/architecture.md` into `docs/development.md`
+  - Merged `docs/abmc_implementation_details.md` into `docs/algorithms.md`
+  - Removed `docs/README.md` (table of contents only)
+
 ## [2.6.0] - 2026-03-09
 
 ### Added

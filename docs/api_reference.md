@@ -1,6 +1,6 @@
-# Python API Reference
+# Python APIリファレンス
 
-## Import
+## インポート
 
 ```python
 import ngsolve  # Must be imported first (loads shared libraries)
@@ -25,41 +25,41 @@ from sparsesolv_ngsolve import (
 )
 ```
 
-Factory functions automatically detect the matrix type (real/complex) via `mat.IsComplex()`.
+ファクトリ関数は `mat.IsComplex()` により行列の型（実数/複素数）を自動判定する。
 
 ---
 
 ## ICPreconditioner
 
-Incomplete Cholesky (IC) preconditioner.
+不完全コレスキー（IC）前処理。
 
-### Constructor
+### コンストラクタ
 
 ```python
 pre = ICPreconditioner(mat, freedofs=None, shift=1.05)
 ```
 
-| Parameter | Type | Default | Description |
+| パラメータ | 型 | デフォルト | 説明 |
 |-----------|------|---------|-------------|
-| `mat` | `SparseMatrix` | - | SPD matrix (real/complex) |
-| `freedofs` | `BitArray` or `None` | `None` | Free DOFs. `None` means all DOFs are free |
-| `shift` | `float` | `1.05` | Shift parameter |
+| `mat` | `SparseMatrix` | - | SPD行列（実数/複素数） |
+| `freedofs` | `BitArray` or `None` | `None` | 自由度。`None` の場合は全自由度を対象とする |
+| `shift` | `float` | `1.05` | シフトパラメータ |
 
-### Properties
+### プロパティ
 
-| Property | Type | Description |
+| プロパティ | 型 | 説明 |
 |----------|------|-------------|
-| `shift` | `float` | Shift parameter (read/write) |
-| `use_abmc` | `bool` | Enable ABMC ordering (read/write) |
-| `abmc_block_size` | `int` | ABMC block size (read/write) |
+| `shift` | `float` | シフトパラメータ（読み書き可） |
+| `use_abmc` | `bool` | ABMCオーダリングの有効化（読み書き可） |
+| `abmc_block_size` | `int` | ABMCブロックサイズ（読み書き可） |
 
-### Methods
+### メソッド
 
-| Method | Description |
+| メソッド | 説明 |
 |--------|-------------|
-| `Update()` | Recompute preconditioner (call after matrix changes) |
+| `Update()` | 前処理を再計算する（行列変更後に呼び出すこと） |
 
-### Example
+### 使用例
 
 ```python
 pre = ICPreconditioner(a.mat, freedofs=fes.FreeDofs(), shift=1.05)
@@ -71,26 +71,26 @@ gfu.vec.data = inv * f.vec
 
 ## SGSPreconditioner
 
-Symmetric Gauss-Seidel (SGS) preconditioner.
+対称ガウス・ザイデル（SGS）前処理。
 
-### Constructor
+### コンストラクタ
 
 ```python
 pre = SGSPreconditioner(mat, freedofs=None)
 ```
 
-| Parameter | Type | Default | Description |
+| パラメータ | 型 | デフォルト | 説明 |
 |-----------|------|---------|-------------|
-| `mat` | `SparseMatrix` | - | SPD matrix |
-| `freedofs` | `BitArray` or `None` | `None` | Free DOFs |
+| `mat` | `SparseMatrix` | - | SPD行列 |
+| `freedofs` | `BitArray` or `None` | `None` | 自由度 |
 
-### Methods
+### メソッド
 
-| Method | Description |
+| メソッド | 説明 |
 |--------|-------------|
-| `Update()` | Recompute preconditioner |
+| `Update()` | 前処理を再計算する |
 
-### Example
+### 使用例
 
 ```python
 pre = SGSPreconditioner(a.mat, freedofs=fes.FreeDofs())
@@ -102,10 +102,10 @@ gfu.vec.data = inv * f.vec
 
 ## SparseSolvSolver
 
-Unified iterative solver. Supports ICCG, SGSMRTR, CG, and COCR methods.
-Can be used as a `BaseMatrix`, allowing the form `gfu.vec.data = solver * f.vec`.
+統合反復ソルバー。ICCG、SGSMRTR、CG、COCRメソッドに対応。
+`BaseMatrix` として使用可能であり、`gfu.vec.data = solver * f.vec` の形式で利用できる。
 
-### Constructor
+### コンストラクタ
 
 ```python
 solver = SparseSolvSolver(mat, method="ICCG", freedofs=None,
@@ -118,49 +118,49 @@ solver = SparseSolvSolver(mat, method="ICCG", freedofs=None,
                            abmc_use_rcm=False)
 ```
 
-### Parameters
+### パラメータ
 
-| Parameter | Type | Default | Description |
+| パラメータ | 型 | デフォルト | 説明 |
 |-----------|------|---------|-------------|
-| `mat` | `SparseMatrix` | - | SPD matrix |
+| `mat` | `SparseMatrix` | - | SPD行列 |
 | `method` | `str` | `"ICCG"` | `"ICCG"`, `"SGSMRTR"`, `"CG"`, `"COCR"` |
-| `freedofs` | `BitArray` | `None` | Free DOFs |
-| `tol` | `float` | `1e-10` | Convergence tolerance |
-| `maxiter` | `int` | `1000` | Maximum number of iterations |
-| `shift` | `float` | `1.05` | IC factorization shift (for ICCG) |
-| `save_best_result` | `bool` | `True` | Track best solution |
-| `save_residual_history` | `bool` | `False` | Record residual history |
-| `printrates` | `bool` | `False` | Print convergence information |
-| `conjugate` | `bool` | `False` | Conjugate inner product (for Hermitian systems) |
+| `freedofs` | `BitArray` | `None` | 自由度 |
+| `tol` | `float` | `1e-10` | 収束判定閾値 |
+| `maxiter` | `int` | `1000` | 最大反復回数 |
+| `shift` | `float` | `1.05` | IC分解のシフト量（ICCG用） |
+| `save_best_result` | `bool` | `True` | 最良解の追跡 |
+| `save_residual_history` | `bool` | `False` | 残差履歴の記録 |
+| `printrates` | `bool` | `False` | 収束情報の出力 |
+| `conjugate` | `bool` | `False` | 共役内積（エルミート系用） |
 
-### ABMC-Related Parameters
+### ABMC関連パラメータ
 
-| Parameter | Type | Default | Description |
+| パラメータ | 型 | デフォルト | 説明 |
 |-----------|------|---------|-------------|
-| `use_abmc` | `bool` | `False` | Enable ABMC ordering |
-| `abmc_block_size` | `int` | `4` | Number of rows per block |
-| `abmc_num_colors` | `int` | `4` | Target number of colors |
-| `abmc_reorder_spmv` | `bool` | `False` | Perform SpMV in ABMC space |
-| `abmc_use_rcm` | `bool` | `False` | Apply RCM bandwidth reduction beforehand |
+| `use_abmc` | `bool` | `False` | ABMCオーダリングの有効化 |
+| `abmc_block_size` | `int` | `4` | ブロックあたりの行数 |
+| `abmc_num_colors` | `int` | `4` | 目標カラー数 |
+| `abmc_reorder_spmv` | `bool` | `False` | ABMC空間でのSpMV実行 |
+| `abmc_use_rcm` | `bool` | `False` | 事前にRCMバンド幅縮小を適用 |
 
-### Properties (Settable After Construction)
+### プロパティ（構築後に設定可能）
 
-| Property | Type | Description |
+| プロパティ | 型 | 説明 |
 |----------|------|-------------|
-| `auto_shift` | `bool` | Automatic shift adjustment for IC factorization |
-| `diagonal_scaling` | `bool` | Diagonal scaling |
-| `divergence_check` | `bool` | Early termination on stagnation detection |
-| `divergence_threshold` | `float` | Divergence detection threshold |
-| `divergence_count` | `int` | Number of consecutive poor iterations before divergence is declared |
-| `last_result` | `SparseSolvResult` | Most recent solve result |
+| `auto_shift` | `bool` | IC分解の自動シフト調整 |
+| `diagonal_scaling` | `bool` | 対角スケーリング |
+| `divergence_check` | `bool` | 停滞検出時の早期終了 |
+| `divergence_threshold` | `float` | 発散検出の閾値 |
+| `divergence_count` | `int` | 発散と判定するまでの連続不良反復回数 |
+| `last_result` | `SparseSolvResult` | 直近の求解結果 |
 
-### Methods
+### メソッド
 
-| Method | Arguments | Returns | Description |
+| メソッド | 引数 | 戻り値 | 説明 |
 |--------|-----------|---------|-------------|
-| `Solve(rhs, sol)` | `BaseVector`, `BaseVector` | `SparseSolvResult` | Solve with initial guess |
+| `Solve(rhs, sol)` | `BaseVector`, `BaseVector` | `SparseSolvResult` | 初期推定値付きで求解 |
 
-### Example
+### 使用例
 
 ```python
 # Use as BaseMatrix (zero initial guess)
@@ -177,14 +177,14 @@ print(f"Converged: {result.converged}, Iters: {result.iterations}")
 
 ## SparseSolvResult
 
-A struct that stores the solve result.
+求解結果を格納する構造体。
 
-| Field | Type | Description |
+| フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `converged` | `bool` | Whether the solver converged |
-| `iterations` | `int` | Number of iterations |
-| `final_residual` | `float` | Final relative residual |
-| `residual_history` | `list[float]` | Residual at each iteration (when `save_residual_history=True`) |
+| `converged` | `bool` | ソルバーが収束したかどうか |
+| `iterations` | `int` | 反復回数 |
+| `final_residual` | `float` | 最終相対残差 |
+| `residual_history` | `list[float]` | 各反復における残差（`save_residual_history=True` の場合） |
 
 ```python
 result = solver.Solve(f.vec, gfu.vec)
@@ -197,12 +197,12 @@ if result.converged:
 
 ## CompactAMSPreconditioner
 
-Compact AMS preconditioner for real HCurl systems (magnetostatic curl-curl + mass).
+実数HCurlシステム（静磁界のcurl-curl + 質量項）用のCompact AMS前処理。
 
-Header-only C++ implementation. No external libraries required.
-Supports nonlinear solvers (Newton iteration): `Update()` rebuilds only the matrix-dependent parts while preserving geometric information.
+ヘッダオンリーC++実装。外部ライブラリ不要。
+非線形ソルバー（Newton反復）に対応: `Update()` は幾何情報を保持しつつ、行列依存部分のみを再構築する。
 
-### Constructor
+### コンストラクタ
 
 ```python
 pre = CompactAMSPreconditioner(
@@ -212,27 +212,27 @@ pre = CompactAMSPreconditioner(
     subspace_solver=0, num_smooth=1)
 ```
 
-| Parameter | Type | Default | Description |
+| パラメータ | 型 | デフォルト | 説明 |
 |-----------|------|---------|-------------|
-| `mat` | `SparseMatrix` (real) | - | Real SPD matrix (curl-curl + mass) |
-| `grad_mat` | `SparseMatrix` (real) | - | Discrete gradient G (HCurl -> H1) |
-| `freedofs` | `BitArray` or `None` | `None` | Free DOFs |
-| `coord_x` | `list[float]` | `[]` | Vertex x-coordinates |
-| `coord_y` | `list[float]` | `[]` | Vertex y-coordinates |
-| `coord_z` | `list[float]` | `[]` | Vertex z-coordinates |
-| `cycle_type` | `int` | `1` | AMS cycle type (1="01210", 7="0201020") |
-| `print_level` | `int` | `0` | Output verbosity level |
+| `mat` | `SparseMatrix` (real) | - | 実数SPD行列（curl-curl + 質量項） |
+| `grad_mat` | `SparseMatrix` (real) | - | 離散勾配 G (HCurl -> H1) |
+| `freedofs` | `BitArray` or `None` | `None` | 自由度 |
+| `coord_x` | `list[float]` | `[]` | 頂点のx座標 |
+| `coord_y` | `list[float]` | `[]` | 頂点のy座標 |
+| `coord_z` | `list[float]` | `[]` | 頂点のz座標 |
+| `cycle_type` | `int` | `1` | AMSサイクル型（1="01210", 7="0201020"） |
+| `print_level` | `int` | `0` | 出力の詳細レベル |
 | `subspace_solver` | `int` | `0` | 0=CompactAMG, 1=SparseCholesky |
-| `num_smooth` | `int` | `1` | Number of l1-Jacobi smoothing steps |
+| `num_smooth` | `int` | `1` | l1-Jacobiスムージングのステップ数 |
 
-### Methods
+### メソッド
 
-| Method | Description |
+| メソッド | 説明 |
 |--------|-------------|
-| `Update()` | Rebuild preconditioner (retains geometric information, recomputes only matrix-dependent parts) |
-| `Update(new_mat)` | Rebuild preconditioner with a new matrix |
+| `Update()` | 前処理を再構築する（幾何情報を保持し、行列依存部分のみ再計算） |
+| `Update(new_mat)` | 新しい行列で前処理を再構築する |
 
-### Example
+### 使用例
 
 ```python
 import sparsesolv_ngsolve as ssn
@@ -258,7 +258,7 @@ inv = CGSolver(a.mat, pre, tol=1e-10, maxiter=500)
 gfu.vec.data = inv * f.vec
 ```
 
-### Usage in Newton Iteration (Nonlinear Problems)
+### Newton反復での使用方法（非線形問題）
 
 ```python
 pre = ssn.CompactAMSPreconditioner(a.mat, G_mat,
@@ -277,13 +277,13 @@ for k in range(max_newton):
 
 ## ComplexCompactAMSPreconditioner
 
-Compact AMS preconditioner for complex eddy current systems (fused Re/Im processing).
+複素渦電流システム用のCompact AMS前処理（Re/Im融合処理）。
 
-Header-only C++ implementation. No external libraries required.
-Uses fused Re/Im SpMV to load matrix data once and process real and imaginary parts simultaneously.
-Symmetric preconditioner (l1-Jacobi smoother) -- **COCRSolver recommended**.
+ヘッダオンリーC++実装。外部ライブラリ不要。
+Re/Im融合SpMVにより行列データを一度だけロードし、実部と虚部を同時に処理する。
+対称前処理（l1-Jacobiスムーザ）-- **COCRSolverの使用を推奨**。
 
-### Constructor
+### コンストラクタ
 
 ```python
 pre = ComplexCompactAMSPreconditioner(
@@ -293,29 +293,29 @@ pre = ComplexCompactAMSPreconditioner(
     correction_weight=1.0, subspace_solver=0, num_smooth=1)
 ```
 
-| Parameter | Type | Default | Description |
+| パラメータ | 型 | デフォルト | 説明 |
 |-----------|------|---------|-------------|
-| `a_real_mat` | `SparseMatrix` (real) | - | Real SPD auxiliary matrix (K + eps*M + \|omega\|*sigma*M) |
-| `grad_mat` | `SparseMatrix` (real) | - | Discrete gradient G (HCurl -> H1) |
-| `freedofs` | `BitArray` or `None` | `None` | Free DOFs |
-| `coord_x` | `list[float]` | `[]` | Vertex x-coordinates |
-| `coord_y` | `list[float]` | `[]` | Vertex y-coordinates |
-| `coord_z` | `list[float]` | `[]` | Vertex z-coordinates |
-| `ndof_complex` | `int` | `0` | Number of complex DOFs (0=auto-detect from matrix) |
-| `cycle_type` | `int` | `1` | AMS cycle type (1="01210", 7="0201020") |
-| `print_level` | `int` | `0` | Output verbosity level |
-| `correction_weight` | `float` | `1.0` | Correction weight |
+| `a_real_mat` | `SparseMatrix` (real) | - | 実数SPD補助行列 (K + eps*M + \|omega\|*sigma*M) |
+| `grad_mat` | `SparseMatrix` (real) | - | 離散勾配 G (HCurl -> H1) |
+| `freedofs` | `BitArray` or `None` | `None` | 自由度 |
+| `coord_x` | `list[float]` | `[]` | 頂点のx座標 |
+| `coord_y` | `list[float]` | `[]` | 頂点のy座標 |
+| `coord_z` | `list[float]` | `[]` | 頂点のz座標 |
+| `ndof_complex` | `int` | `0` | 複素自由度数（0=行列から自動検出） |
+| `cycle_type` | `int` | `1` | AMSサイクル型（1="01210", 7="0201020"） |
+| `print_level` | `int` | `0` | 出力の詳細レベル |
+| `correction_weight` | `float` | `1.0` | 補正重み |
 | `subspace_solver` | `int` | `0` | 0=CompactAMG, 1=SparseCholesky |
-| `num_smooth` | `int` | `1` | Number of l1-Jacobi smoothing steps |
+| `num_smooth` | `int` | `1` | l1-Jacobiスムージングのステップ数 |
 
-### Methods
+### メソッド
 
-| Method | Description |
+| メソッド | 説明 |
 |--------|-------------|
-| `Update()` | Rebuild preconditioner (retains geometric information, recomputes only matrix-dependent parts) |
-| `Update(new_a_real)` | Rebuild preconditioner with a new real auxiliary matrix |
+| `Update()` | 前処理を再構築する（幾何情報を保持し、行列依存部分のみ再計算） |
+| `Update(new_a_real)` | 新しい実数補助行列で前処理を再構築する |
 
-### Example
+### 使用例
 
 ```python
 import sparsesolv_ngsolve as ssn
@@ -332,7 +332,7 @@ with TaskManager():
     gfu.vec.data = inv * f.vec
 ```
 
-### Usage in Newton Iteration (Nonlinear Eddy Current)
+### Newton反復での使用方法（非線形渦電流問題）
 
 ```python
 pre = ssn.ComplexCompactAMSPreconditioner(a_real.mat, G_mat, ...)
@@ -345,13 +345,13 @@ for k in range(max_newton):
     gfu.vec.data += delta
 ```
 
-For details, see [compact_ams_cocr.md](compact_ams_cocr.md).
+詳細は [compact_ams_cocr.md](compact_ams_cocr.md) を参照。
 
 ---
 
 ## has_compact_ams
 
-Function to check whether Compact AMG/AMS support is available.
+Compact AMG/AMSサポートが利用可能かどうかを確認する関数。
 
 ```python
 ssn.has_compact_ams()  # -> True if Compact AMG/AMS support is available
@@ -361,17 +361,17 @@ ssn.has_compact_ams()  # -> True if Compact AMG/AMS support is available
 
 ## COCRSolver
 
-COCR (Conjugate Orthogonal Conjugate Residual) solver. Native C++ implementation.
-Optimal short-recurrence Krylov solver for complex symmetric systems (A^T=A, NOT Hermitian).
+COCR（Conjugate Orthogonal Conjugate Residual）ソルバー。ネイティブC++実装。
+複素対称系（A^T=A、エルミートではない）に最適な短漸化式Krylovソルバー。
 
-Uses non-conjugate inner product (x^T y). Minimizes ||A*r~||_2, providing smoother convergence than COCG.
-Cost per iteration: 1 MatVec + 1 preconditioner application (same as CG).
+非共役内積（x^T y）を使用。||A*r~||_2 を最小化し、COCGよりも滑らかな収束を実現する。
+1反復あたりのコスト: 1回のMatVec + 1回の前処理適用（CGと同等）。
 
-**Reference**: Sogabe & Zhang (2007), J. Comput. Appl. Math., 199(2), 297-303.
+**参考文献**: Sogabe & Zhang (2007), J. Comput. Appl. Math., 199(2), 297-303.
 
-### Usage 1: COCRSolver (with External Preconditioner)
+### 使用法1: COCRSolver（外部前処理との組み合わせ）
 
-Same interface as NGSolve's `CGSolver`. Use in combination with AMS preconditioner, etc.
+NGSolveの `CGSolver` と同じインタフェース。AMS前処理等と組み合わせて使用する。
 
 ```python
 import sparsesolv_ngsolve
@@ -382,18 +382,18 @@ gfu.vec.data = inv * f.vec
 print(f"COCR converged in {inv.iterations} iterations")
 ```
 
-| Parameter | Type | Default | Description |
+| パラメータ | 型 | デフォルト | 説明 |
 |-----------|------|---------|-------------|
-| `mat` | `BaseMatrix` | - | Complex symmetric matrix |
-| `pre` | `BaseMatrix` | - | Preconditioner matrix |
-| `freedofs` | `BitArray` or `None` | `None` | Free DOFs. `None` means all DOFs are free |
-| `maxiter` | `int` | `500` | Maximum number of iterations |
-| `tol` | `float` | `1e-8` | Convergence tolerance (relative residual) |
-| `printrates` | `bool` | `False` | Print convergence information |
+| `mat` | `BaseMatrix` | - | 複素対称行列 |
+| `pre` | `BaseMatrix` | - | 前処理行列 |
+| `freedofs` | `BitArray` or `None` | `None` | 自由度。`None` の場合は全自由度を対象とする |
+| `maxiter` | `int` | `500` | 最大反復回数 |
+| `tol` | `float` | `1e-8` | 収束判定閾値（相対残差） |
+| `printrates` | `bool` | `False` | 収束情報の出力 |
 
-### Usage 2: SparseSolvSolver(method="COCR")
+### 使用法2: SparseSolvSolver(method="COCR")
 
-Via the SparseSolvSolver unified interface. Uses internal IC preconditioner.
+SparseSolvSolver統合インタフェース経由。内部IC前処理を使用する。
 
 ```python
 solver = sparsesolv_ngsolve.SparseSolvSolver(mat, method="COCR",
@@ -402,24 +402,24 @@ gfu.vec.data = solver * f.vec
 result = solver.last_result
 ```
 
-### Properties
+### プロパティ
 
-| Property | Type | Description |
+| プロパティ | 型 | 説明 |
 |----------|------|-------------|
-| `iterations` | `int` | Number of iterations performed (COCRSolver only) |
+| `iterations` | `int` | 実行された反復回数（COCRSolverのみ） |
 
-### Convergence Criterion
+### 収束判定基準
 
 ```
 sqrt(|rt^T * r|) / sqrt(|rt0^T * r0|) < tol
 ```
-where `rt = M^{-1} * r` (preconditioned residual).
-Equivalent convergence criterion to NGSolve's `CGSolver(conjugate=False)`.
+ここで `rt = M^{-1} * r`（前処理付き残差）。
+NGSolveの `CGSolver(conjugate=False)` と同等の収束判定基準。
 
-### About COCG
+### COCGについて
 
-COCG (Conjugate Orthogonal CG) is mathematically equivalent to `CGSolver(conjugate=False)`.
-A separate class is not provided.
+COCG（Conjugate Orthogonal CG）は `CGSolver(conjugate=False)` と数学的に等価である。
+別個のクラスは提供していない。
 
 ```python
 from ngsolve.krylovspace import CGSolver
@@ -430,13 +430,13 @@ inv = CGSolver(a.mat, pre, conjugate=False, maxiter=500, tol=1e-8)
 
 ## GMRESSolver
 
-Left-preconditioned GMRES (Generalized Minimal Residual) solver. Native C++ implementation.
-Supports non-symmetric matrices. Use when the preconditioner is non-symmetric.
+左前処理付きGMRES（Generalized Minimal Residual）ソルバー。ネイティブC++実装。
+非対称行列に対応。前処理が非対称な場合に使用する。
 
-**Note**: For symmetric preconditioners (IC, SGS, Compact AMS), CG or COCR is recommended.
-Use GMRES only when the preconditioner is non-symmetric.
+**注意**: 対称前処理（IC、SGS、Compact AMS）の場合はCGまたはCOCRを推奨する。
+GMRESは前処理が非対称な場合にのみ使用すること。
 
-### Constructor
+### コンストラクタ
 
 ```python
 inv = sparsesolv_ngsolve.GMRESSolver(mat, pre, freedofs=None,
@@ -446,23 +446,23 @@ gfu.vec.data = inv * f.vec
 print(f"GMRES converged in {inv.iterations} iterations")
 ```
 
-| Parameter | Type | Default | Description |
+| パラメータ | 型 | デフォルト | 説明 |
 |-----------|------|---------|-------------|
-| `mat` | `BaseMatrix` | - | Coefficient matrix (symmetric/non-symmetric) |
-| `pre` | `BaseMatrix` | - | Left preconditioner matrix |
-| `freedofs` | `BitArray` or `None` | `None` | Free DOFs. `None` means all DOFs are free |
-| `maxiter` | `int` | `500` | Maximum number of iterations |
-| `tol` | `float` | `1e-8` | Convergence tolerance (relative residual) |
-| `restart` | `int` | `30` | Restart period |
-| `printrates` | `bool` | `False` | Print convergence information |
+| `mat` | `BaseMatrix` | - | 係数行列（対称/非対称） |
+| `pre` | `BaseMatrix` | - | 左前処理行列 |
+| `freedofs` | `BitArray` or `None` | `None` | 自由度。`None` の場合は全自由度を対象とする |
+| `maxiter` | `int` | `500` | 最大反復回数 |
+| `tol` | `float` | `1e-8` | 収束判定閾値（相対残差） |
+| `restart` | `int` | `30` | リスタート周期 |
+| `printrates` | `bool` | `False` | 収束情報の出力 |
 
-### Properties
+### プロパティ
 
-| Property | Type | Description |
+| プロパティ | 型 | 説明 |
 |----------|------|-------------|
-| `iterations` | `int` | Number of iterations performed |
+| `iterations` | `int` | 実行された反復回数 |
 
-### Example
+### 使用例
 
 ```python
 import sparsesolv_ngsolve as ssn
@@ -479,13 +479,13 @@ gfu.vec.data = inv * f.vec
 
 ## CompactAMGPreconditioner
 
-Classical AMG (Algebraic Multigrid) preconditioner. Designed for H1 Poisson systems.
-Uses PMIS coarsening + classical interpolation + l1-Jacobi smoothing.
+古典的AMG（代数的マルチグリッド）前処理。H1 Poissonシステム用に設計されている。
+PMIS粗視化 + 古典的補間 + l1-Jacobiスムージングを使用する。
 
-Also used internally as the subspace solver for CompactAMS.
-Can be used standalone for SPD problems with H1 finite elements.
+CompactAMSの内部で部分空間ソルバーとしても使用される。
+H1有限要素によるSPD問題に対して単独で使用可能。
 
-### Constructor
+### コンストラクタ
 
 ```python
 pre = CompactAMGPreconditioner(mat, freedofs=None,
@@ -494,17 +494,17 @@ pre = CompactAMGPreconditioner(mat, freedofs=None,
                                 print_level=0)
 ```
 
-| Parameter | Type | Default | Description |
+| パラメータ | 型 | デフォルト | 説明 |
 |-----------|------|---------|-------------|
-| `mat` | `SparseMatrix` (real) | - | SPD matrix |
-| `freedofs` | `BitArray` or `None` | `None` | Free DOFs |
-| `theta` | `float` | `0.25` | Strong connection threshold |
-| `max_levels` | `int` | `25` | Maximum number of levels |
-| `min_coarse` | `int` | `50` | Minimum DOF count at the coarsest level |
-| `num_smooth` | `int` | `1` | Number of smoothing steps |
-| `print_level` | `int` | `0` | Output verbosity level |
+| `mat` | `SparseMatrix` (real) | - | SPD行列 |
+| `freedofs` | `BitArray` or `None` | `None` | 自由度 |
+| `theta` | `float` | `0.25` | 強結合閾値 |
+| `max_levels` | `int` | `25` | 最大レベル数 |
+| `min_coarse` | `int` | `50` | 最粗レベルの最小自由度数 |
+| `num_smooth` | `int` | `1` | スムージングステップ数 |
+| `print_level` | `int` | `0` | 出力の詳細レベル |
 
-### Example
+### 使用例
 
 ```python
 import sparsesolv_ngsolve as ssn

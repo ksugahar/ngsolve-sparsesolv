@@ -1,24 +1,24 @@
-# Compact AMS + COCR Solver
+# Compact AMS + COCR ソルバー
 
-Header-only C++ preconditioner + Krylov solver for HCurl problems.
-No external dependency. All parallelism via NGSolve TaskManager.
+ヘッダーオンリーのC++前処理+Krylovソルバーで、HCurl問題に対応する。
+外部依存なし。すべての並列処理はNGSolve TaskManagerで行う。
 
-Supports both **real** (magnetostatics) and **complex** (eddy current) systems.
-`Update()` method enables Newton iteration for nonlinear problems.
+**実数**（静磁場）と**複素数**（渦電流）の両方の系に対応する。
+`Update()` メソッドにより非線形問題のNewton反復に使用可能。
 
-## Problem Setting
+## 問題設定
 
-Eddy current finite element discretization yields:
+渦電流有限要素離散化により以下の連立方程式が得られる：
 
 ```
 A x = b,   A = K + jw * sigma * M
 ```
 
-where K is the curl-curl stiffness matrix, M is the mass matrix (conductor region),
-and sigma is the electrical conductivity. The system matrix A is **complex symmetric**
-(A^T = A, NOT Hermitian), which enables COCR's short-recurrence Krylov method.
+ここで K はcurl-curl剛性行列、M は質量行列（導体領域）、
+sigma は電気伝導率である。系行列 A は**複素対称**（A^T = A、エルミートではない）
+であり、COCRの短漸化式Krylov法が適用可能となる。
 
-## Architecture
+## アーキテクチャ
 
 ```
                         COCR Solver
@@ -33,15 +33,15 @@ and sigma is the electrical conductivity. The system matrix A is **complex symme
       (l1-Jacobi)  (G^T AG)  (Pi^T A Pi)  (V-cycle)
 ```
 
-Three layers work together:
+3つの層が連携して動作する：
 
-1. **COCR** (outer Krylov) - exploits A^T = A for O(n) memory, no restart
-2. **ComplexCompactAMS** (preconditioner) - fused Re/Im at all levels
-3. **CompactAMG** (coarse solver) - classical AMG with DualMult fusion
+1. **COCR**（外側Krylov法）- A^T = A を利用しO(n)メモリで動作、リスタート不要
+2. **ComplexCompactAMS**（前処理）- 全レベルでRe/Im融合処理
+3. **CompactAMG**（粗グリッドソルバー）- DualMult融合付き古典的AMG
 
-## Quick Start
+## クイックスタート
 
-### Real (magnetostatics)
+### 実数系（静磁場）
 
 ```python
 import sparsesolv_ngsolve as ssn
@@ -78,7 +78,7 @@ with TaskManager():
     gfu.vec.data = inv * f.vec
 ```
 
-### Complex (eddy current)
+### 複素数系（渦電流）
 
 ```python
 import sparsesolv_ngsolve as ssn
@@ -143,31 +143,29 @@ with TaskManager():
 print(f"Converged in {inv.iterations} iterations")
 ```
 
-### Why a_real?
+### なぜ a_real が必要か
 
-The AMS preconditioner operates on a **real SPD (symmetric positive definite)** matrix,
-even when the actual system is complex. This is because:
+AMS前処理は、実際の系が複素数であっても**実数SPD（対称正定値）** 行列上で動作する。
+その理由は以下の通りである：
 
-1. **AMG coarsening requires real matrices.** PMIS coarsening and classical interpolation
-   use strength-of-connection based on real matrix entries. Complex entries have no
-   natural ordering for strength thresholds.
+1. **AMG粗視化には実数行列が必要。** PMIS粗視化と古典的補間は、実数行列要素に基づく
+   結合強度（strength-of-connection）を使用する。複素数要素には強度閾値のための
+   自然な順序が存在しない。
 
-2. **The real auxiliary matrix captures the spectral behavior.** For the complex system
-   `A = K + jw*sigma*M`, the real auxiliary `A_real = K + |omega|*sigma*M + eps*M`
-   has the same sparsity pattern and similar spectral properties. The `|omega|*sigma`
-   term (without the `j`) ensures the mass matrix contribution from the conductor
-   region is represented in the preconditioner.
+2. **実数補助行列はスペクトル特性を反映する。** 複素系
+   `A = K + jw*sigma*M` に対して、実数補助行列 `A_real = K + |omega|*sigma*M + eps*M`
+   は同じスパースパターンを持ち、類似のスペクトル特性を有する。`|omega|*sigma`
+   の項（`j` なし）により、導体領域からの質量行列の寄与が前処理に反映される。
 
-3. **Fused Re/Im application.** The preconditioner applies the same real AMS V-cycle
-   to both the real and imaginary parts of the residual simultaneously (DualMult),
-   halving memory bandwidth cost.
+3. **Re/Im融合適用。** 前処理は同一の実数AMS V-cycleを残差の実部と虚部の両方に
+   同時に適用する（DualMult）。これによりメモリ帯域コストが半減する。
 
-The complex system matrix `a.mat` is only used by the outer COCR solver for matrix-vector
-products. The preconditioner never sees the complex matrix directly.
+複素系行列 `a.mat` は外側のCOCRソルバーによる行列ベクトル積にのみ使用される。
+前処理が複素行列を直接参照することはない。
 
-### Common Mistakes
+### よくある間違い
 
-**Wrong freedofs for complex preconditioner:**
+**複素前処理に誤ったfreedofsを渡す：**
 ```python
 # WRONG: passing complex freedofs to preconditioner
 pre = ssn.ComplexCompactAMSPreconditioner(
@@ -180,7 +178,7 @@ pre = ssn.ComplexCompactAMSPreconditioner(
     freedofs=fes_real.FreeDofs())    # fes_real is non-complex
 ```
 
-**Missing TaskManager:**
+**TaskManagerの欠落：**
 ```python
 # WRONG: no TaskManager -> single-threaded, 5-10x slower
 inv = ssn.COCRSolver(a.mat, pre, ...)
@@ -192,7 +190,7 @@ with TaskManager():
     gfu.vec.data = inv * f.vec
 ```
 
-**Missing nograds=True:**
+**nograds=Trueの欠落：**
 ```python
 # WRONG: without nograds, HCurl includes gradient DOFs that
 # make the system much larger and harder to precondition
@@ -202,7 +200,7 @@ fes = HCurl(mesh, order=1, dirichlet="outer")
 fes = HCurl(mesh, order=1, nograds=True, dirichlet="outer")
 ```
 
-**Wrong matrix type for ComplexCompactAMSPreconditioner:**
+**ComplexCompactAMSPreconditionerに誤った行列型を渡す：**
 ```python
 # WRONG: passing complex matrix
 pre = ssn.ComplexCompactAMSPreconditioner(
@@ -213,7 +211,7 @@ pre = ssn.ComplexCompactAMSPreconditioner(
     a_real_mat=a_real.mat, ...)     # a_real is real BilinearForm
 ```
 
-**Order > 1 not supported:**
+**order > 1 は未対応：**
 ```python
 # WRONG: order=2 not supported by CompactAMS
 fes = HCurl(mesh, order=2, nograds=True, dirichlet="outer")
@@ -222,61 +220,61 @@ fes = HCurl(mesh, order=2, nograds=True, dirichlet="outer")
 fes = HCurl(mesh, order=1, nograds=True, dirichlet="outer")
 ```
 
-## Parameters
+## パラメータ
 
 **ComplexCompactAMSPreconditioner**:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `a_real_mat` | (required) | Real SPD auxiliary matrix (K + eps*M + \|omega\|*sigma*M) |
-| `grad_mat` | (required) | Discrete gradient G (HCurl -> H1) |
-| `freedofs` | None | Free DOFs mask for HCurl space |
-| `coord_x/y/z` | (required) | Vertex coordinates (length = ndof_h1) |
-| `ndof_complex` | 0 | Number of complex DOFs (0 = auto-derive from matrix) |
-| `cycle_type` | 1 | AMS cycle: 1 = "01210", 7 = "0201020" |
-| `print_level` | 0 | Verbosity (0 = silent) |
-| `correction_weight` | 1.0 | Subspace correction weight |
-| `subspace_solver` | 0 | 0 = CompactAMG, 1 = SparseCholesky (diagnostic) |
-| `num_smooth` | 1 | l1-Jacobi sweeps per smooth step |
+| `a_real_mat` | (required) | 実数SPD補助行列 (K + eps*M + \|omega\|*sigma*M) |
+| `grad_mat` | (required) | 離散勾配 G (HCurl -> H1) |
+| `freedofs` | None | HCurl空間の自由度マスク |
+| `coord_x/y/z` | (required) | 頂点座標（長さ = ndof_h1） |
+| `ndof_complex` | 0 | 複素自由度数（0 = 行列から自動導出） |
+| `cycle_type` | 1 | AMSサイクル: 1 = "01210", 7 = "0201020" |
+| `print_level` | 0 | 出力レベル（0 = 無出力） |
+| `correction_weight` | 1.0 | 部分空間補正の重み |
+| `subspace_solver` | 0 | 0 = CompactAMG, 1 = SparseCholesky（診断用） |
+| `num_smooth` | 1 | l1-Jacobiの平滑化回数 |
 
 **COCRSolver**:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `mat` | (required) | System matrix (real or complex BaseMatrix) |
-| `pre` | (required) | Preconditioner (BaseMatrix) |
-| `freedofs` | None | Free DOFs mask |
-| `maxiter` | 500 | Maximum iterations |
-| `tol` | 1e-8 | Relative convergence tolerance |
-| `printrates` | False | Print convergence info |
+| `mat` | (required) | 系行列（実数または複素数のBaseMatrix） |
+| `pre` | (required) | 前処理（BaseMatrix） |
+| `freedofs` | None | 自由度マスク |
+| `maxiter` | 500 | 最大反復回数 |
+| `tol` | 1e-8 | 相対収束判定閾値 |
+| `printrates` | False | 収束情報の出力 |
 
-## Source Files
+## ソースファイル
 
 | File | Lines | Description |
 |------|-------|-------------|
-| `compact_amg.hpp` | ~900 | Classical AMG: PMIS coarsening, l1-Jacobi, V-cycle, DualMult |
-| `compact_ams.hpp` | ~750 | AMS preconditioner: Hiptmair-Xu auxiliary space method |
-| `complex_compact_ams.hpp` | ~340 | Fused Re/Im ComplexCompactAMS for complex systems |
-| `sparsesolv_solvers.hpp` | ~300 | COCRSolverNGS with fused vector operations |
+| `compact_amg.hpp` | ~900 | 古典的AMG: PMIS粗視化、l1-Jacobi、V-cycle、DualMult |
+| `compact_ams.hpp` | ~750 | AMS前処理: Hiptmair-Xu補助空間法 |
+| `complex_compact_ams.hpp` | ~340 | 複素系向けRe/Im融合ComplexCompactAMS |
+| `sparsesolv_solvers.hpp` | ~300 | 融合ベクトル演算付きCOCRSolverNGS |
 
-All files are in `include/sparsesolv/preconditioners/` (AMG/AMS) and
-`include/sparsesolv/ngsolve/` (COCR solver, Python exports).
+すべてのファイルは `include/sparsesolv/preconditioners/`（AMG/AMS）および
+`include/sparsesolv/ngsolve/`（COCRソルバー、Pythonエクスポート）に配置されている。
 
-## Algorithm Details
+## アルゴリズムの詳細
 
 ### CompactAMG (compact_amg.hpp)
 
-Classical algebraic multigrid with the following components:
+以下のコンポーネントを持つ古典的代数的マルチグリッド法：
 
-- **Coarsening**: PMIS (Parallel Modified Independent Set) based on De Sterck et al. (2006)
-- **Interpolation**: Classical direct interpolation (Ruge-Stueben 1987)
-- **Smoother**: l1-Jacobi (truncated l1 norm: `diag + 0.5*|off_diag|`, capped at `4/3*diag`)
-- **Coarsest level**: NGSolve SparseCholesky direct solver
-- **Strength threshold**: 0.25 (configurable via `amg_theta`)
+- **粗視化**: PMIS (Parallel Modified Independent Set)、De Sterck et al. (2006) に基づく
+- **補間**: 古典的直接補間 (Ruge-Stueben 1987)
+- **平滑化**: l1-Jacobi（打ち切りl1ノルム: `diag + 0.5*|off_diag|`、`4/3*diag` で上限）
+- **最粗レベル**: NGSolve SparseCholesky直接法ソルバー
+- **結合強度閾値**: 0.25（`amg_theta` で設定可能）
 
-**DualMult**: Processes two right-hand sides simultaneously at every AMG level.
-SpMV is memory-bandwidth-bound; loading matrix rows once for two vectors
-halves the bandwidth cost:
+**DualMult**: すべてのAMGレベルで2つの右辺を同時に処理する。
+SpMVはメモリ帯域律速であるため、行列の各行を1回のロードで2つのベクトルに適用すれば
+帯域コストが半減する：
 
 ```cpp
 // DualResidual: res1 = b1 - A*x1, res2 = b2 - A*x2  (one matrix pass)
@@ -293,14 +291,14 @@ ParallelFor(n, [&](size_t i) {
 });
 ```
 
-DualMult includes fused versions of: V-cycle, l1-Jacobi smooth, residual, SpMV, MultAdd.
-Each AMG Level stores dual work vectors (`residual2`, `tmp2`, `correction2`).
+DualMultには以下の融合版が含まれる: V-cycle、l1-Jacobi平滑化、残差計算、SpMV、MultAdd。
+各AMGレベルは二重作業ベクトル（`residual2`、`tmp2`、`correction2`）を保持する。
 
 ### CompactAMS (compact_ams.hpp)
 
-Implements the Hiptmair-Xu (2007) auxiliary space preconditioner for HCurl systems.
+Hiptmair-Xu (2007) のHCurl系向け補助空間前処理を実装する。
 
-**AMS V-cycle** (cycle_type=1, pattern "01210"):
+**AMS V-cycle** (cycle_type=1, パターン "01210"):
 
 ```
 1. FineSmooth     : l1-Jacobi on A_bc (fine HCurl grid)
@@ -310,27 +308,27 @@ Implements the Hiptmair-Xu (2007) auxiliary space preconditioner for HCurl syste
 5. FineSmooth     : repeat
 ```
 
-**Pi matrix construction** (Kolev-Vassilevski formula):
+**Pi行列の構成**（Kolev-Vassilevskiの公式）：
 
 ```
 Gd[e] = (G * coord_d)[e]           // edge vector in d-direction
 Pi_d[e,v] = |G[e,v]| * 0.5 * Gd[e] // nodal interpolation operator
 ```
 
-**Nodal correction** is additive: Pix, Piy, Piz corrections computed from the same
-residual and added together. This saves 2 fine-level SpMVs per cycle compared to
-multiplicative approach.
+**節点補正**は加法的に行われる: Pix、Piy、Piz補正は同一の残差から計算され、
+加算される。これにより乗法的アプローチと比較して、サイクル当たり2回の
+細レベルSpMVが節約される。
 
-**Setup** builds 4 CompactAMG instances (G, Pix, Piy, Piz) in parallel via
-`ParallelFor(4, ...)`.
+**セットアップ**では `ParallelFor(4, ...)` により4つのCompactAMGインスタンス
+（G、Pix、Piy、Piz）を並列に構築する。
 
 ### ComplexCompactAMS (complex_compact_ams.hpp)
 
-Wraps CompactAMS for complex eddy current systems. The key optimization is
-**fused Re/Im processing**: fine-level SpMV operations load matrix data once
-and process both real and imaginary parts simultaneously.
+複素渦電流系向けにCompactAMSをラップする。主要な最適化は
+**Re/Im融合処理**である：細レベルのSpMV演算で行列データを1回ロードし、
+実部と虚部を同時に処理する。
 
-**Fused operations**:
+**融合演算**:
 
 | Operation | Matrix | Conventional | Fused |
 |-----------|--------|-------------|-------|
@@ -340,29 +338,28 @@ and process both real and imaginary parts simultaneously.
 | Prolongate | G, Pi_d | 2 passes each | 1 pass each |
 | AMG V-cycle | coarse levels | 2 calls | DualMult (fused) |
 
-**FusedFineSmooth** must be two-phase to avoid race conditions:
+**FusedFineSmooth** は競合状態を回避するため2フェーズで実行する必要がある：
 
 ```
 Phase 1: res[i] = b[i] - (A*x)[i]   for ALL i   (reads OLD x)
 Phase 2: x[i] += res[i] / l1[i]     for ALL i   (no data dependency)
 ```
 
-A single-phase approach (compute residual and update in one pass) creates
-chaotic Jacobi: ParallelFor may read x[j] before or after another thread
-updates it, leading to divergence.
+1フェーズ方式（残差計算と更新を同時に行う）ではカオス的Jacobiとなる：
+ParallelForが別スレッドの更新前後で x[j] を読む可能性があり、発散を引き起こす。
 
-**AMG DualMult** is used for all coarse-level solves (gradient + 3 nodal).
-If the subspace solver is not CompactAMG (e.g., SparseCholesky for debugging),
-falls back to sequential Re/Im.
+**AMG DualMult** はすべての粗レベルソルブ（勾配 + 3節点）に使用される。
+部分空間ソルバーがCompactAMGでない場合（例：デバッグ用SparseCholesky）は、
+逐次的なRe/Im処理にフォールバックする。
 
-### COCR Solver (sparsesolv_solvers.hpp)
+### COCR ソルバー (sparsesolv_solvers.hpp)
 
-Conjugate Orthogonal Conjugate Residual method for complex symmetric systems.
+複素対称系のための共役直交共役残差法（Conjugate Orthogonal Conjugate Residual）。
 
-COCR exploits the complex symmetry (A^T = A) with short recurrences (3-term),
-requiring only 6 work vectors regardless of iteration count.
+COCRは複素対称性（A^T = A）を短漸化式（3項）で利用し、
+反復回数によらず6本の作業ベクトルのみで動作する。
 
-**Fused vector operations** reduce memory traffic:
+**融合ベクトル演算**によりメモリトラフィックを削減する：
 
 ```cpp
 // 3 updates -> 1 ParallelFor
@@ -379,12 +376,12 @@ ParallelFor(n, [=](size_t i) {
 });
 ```
 
-Raw pointer access via `GetVectorData<SCAL>()` bypasses NGSolve's BaseVector
-virtual dispatch overhead.
+`GetVectorData<SCAL>()` による生ポインタアクセスにより、NGSolveの
+BaseVector仮想ディスパッチのオーバーヘッドを回避する。
 
-## Performance Optimization History
+## 性能最適化の履歴
 
-Measured on Hiruma mesh1_3.5T (197,395 DOFs, 168 iterations):
+Hirumaメッシュ mesh1_3.5T（197,395自由度、168反復）での計測結果：
 
 | Optimization | ms/iter | Cumulative Speedup |
 |-------------|---------|-------------------|
@@ -393,20 +390,20 @@ Measured on Hiruma mesh1_3.5T (197,395 DOFs, 168 iterations):
 | + Fused COCR vector updates (ParallelFor) | 36.6 | 1.34x |
 | + Fused AMG DualMult (all coarse levels) | 32.7 | **1.50x** |
 
-## Update() for Newton Iteration
+## Newton反復用 Update()
 
-Both `CompactAMSPreconditioner` (real) and `ComplexCompactAMSPreconditioner` (complex)
-support `Update()` for nonlinear solvers where the system matrix changes at each step.
+`CompactAMSPreconditioner`（実数）と `ComplexCompactAMSPreconditioner`（複素数）の
+両方が `Update()` をサポートする。各ステップで系行列が変化する非線形ソルバーに対応する。
 
-### What Update() preserves and rebuilds
+### Update() で保持・再構築される要素
 
 | Category | Components | Rebuilt? |
 |----------|-----------|----------|
-| **Geometry** (one-time) | Pi matrices, G transposes, work vectors | NO |
-| **Matrix-dependent** (per-Update) | A_bc, Galerkin projections (A_G, A_Pi), AMG hierarchies, l1 norms | YES |
+| **幾何情報**（初回のみ） | Pi行列、G転置、作業ベクトル | NO |
+| **行列依存**（Update毎） | A_bc、Galerkin射影 (A_G, A_Pi)、AMG階層、l1ノルム | YES |
 
-This split avoids redundant recomputation of geometric data that depends only on
-the mesh and coordinates, not on the matrix values.
+この分離により、メッシュと座標にのみ依存し行列値に依存しない
+幾何データの冗長な再計算を回避する。
 
 ### API
 
@@ -418,7 +415,7 @@ pre.Update()
 pre.Update(new_mat)
 ```
 
-### Real (magnetostatics + CG)
+### 実数系（静磁場 + CG）
 
 ```python
 import sparsesolv_ngsolve as ssn
@@ -448,7 +445,7 @@ for k in range(max_newton):
     gfu.vec.data += delta
 ```
 
-### Complex (eddy current + COCR)
+### 複素数系（渦電流 + COCR）
 
 ```python
 pre = ssn.ComplexCompactAMSPreconditioner(a_real.mat, G_mat,
@@ -465,47 +462,48 @@ for k in range(max_newton):
     gfu.vec.data += delta
 ```
 
-## Key Design Decisions
+## 主要な設計判断
 
-### Why COCR?
+### なぜCOCRか
 
-The eddy current system A = K + jw*sigma*M satisfies A^T = A (complex symmetric).
-COCR exploits this symmetry with short recurrences (3-term), requiring only 6 work
-vectors regardless of iteration count.
+渦電流系 A = K + jw*sigma*M は A^T = A（複素対称）を満たす。
+COCRはこの対称性を短漸化式（3項）で利用し、
+反復回数によらず6本の作業ベクトルのみで動作する。
 
-### Why fused Re/Im?
+### なぜRe/Im融合か
 
-SpMV is memory-bandwidth-limited on modern hardware. The matrix A_bc is the same
-for both Re and Im parts. Loading each row from memory once and computing both
-dot products halves the bandwidth cost. This applies to:
-- Fine-level smoother (l1-Jacobi)
-- Residual computation (b - A*x)
-- Restriction (P^T * residual)
-- Prolongation (x += P * correction)
-- AMG V-cycle at all coarse levels (via DualMult)
+現代のハードウェアではSpMVはメモリ帯域律速である。行列 A_bc はReとImの
+両方の部分で同一であるため、各行を1回ロードして両方の内積を計算すれば
+帯域コストが半減する。適用対象は以下の通りである：
+- 細レベル平滑化（l1-Jacobi）
+- 残差計算（b - A*x）
+- 制限（P^T * residual）
+- 延長（x += P * correction）
+- すべての粗レベルでのAMG V-cycle（DualMult経由）
 
-### Why l1-Jacobi instead of Gauss-Seidel?
+### なぜGauss-SeidelではなくI1-Jacobiか
 
-l1-Jacobi is fully parallel (no data dependency between rows), making it ideal
-for TaskManager parallelization. Gauss-Seidel requires sequential or multi-color
-ordering, adding complexity. The l1 norm truncation (`diag + 0.5*|off_diag|`,
-capped at `4/3*diag`) provides robust smoothing without over-damping.
+l1-Jacobiは完全に並列化可能（行間のデータ依存性なし）であり、
+TaskManager並列化に最適である。Gauss-Seidelは逐次的またはマルチカラー
+順序付けが必要であり、複雑性が増す。l1ノルム打ち切り
+（`diag + 0.5*|off_diag|`、`4/3*diag` で上限）により、
+過減衰なしにロバストな平滑化を実現する。
 
-### Why additive nodal correction?
+### なぜ加法的節点補正か
 
-The Pix, Piy, Piz corrections all use the same fine-level residual, computed once.
-This saves 2 fine-level SpMV evaluations per AMS cycle compared to a multiplicative
-approach (which would recompute the residual between each Pi correction).
+Pix、Piy、Piz補正はすべて同一の細レベル残差を使用し、1回だけ計算する。
+これにより乗法的アプローチ（各Pi補正の間で残差を再計算する）と比較して、
+AMSサイクル当たり2回の細レベルSpMV評価が節約される。
 
-## Benchmark Results
+## ベンチマーク結果
 
-**Test problem**: Hiruma eddy current model (SA-26-001).
-Copper conductor (sigma = 5.96e7 S/m) with ferromagnetic core (mu_r = 1000).
-Frequency 30 kHz, HCurl order 1, convergence tolerance 1e-10.
+**テスト問題**: Hiruma渦電流モデル (SA-26-001)。
+銅導体 (sigma = 5.96e7 S/m) と強磁性鉄心 (mu_r = 1000)。
+周波数 30 kHz、HCurl次数 1、収束判定閾値 1e-10。
 
-**Environment**: Windows Server 2022, Intel Xeon (8 cores), MSVC 2022, MKL 2024.2.
+**環境**: Windows Server 2022, Intel Xeon (8 cores), MSVC 2022, MKL 2024.2。
 
-### Scaling with Mesh Size
+### メッシュサイズに対するスケーリング
 
 | Mesh | Elements | HCurl DOFs | H1 DOFs | Iters | Setup [s] | Solve [s] | Total [s] | ms/iter | Memory [MB] |
 |------|----------|-----------|---------|-------|-----------|-----------|-----------|---------|-------------|
@@ -515,25 +513,50 @@ Frequency 30 kHz, HCurl order 1, convergence tolerance 1e-10.
 | mesh1_5.5T | 280,278 | 331,595 | 49,643 | 249 | 1.9 | 14.3 | 16.2 | 57.3 | 725 |
 | mesh1_20.5T | 1,227,241 | 1,441,102 | 211,337 | 499 | 24.9 | 197.7 | 222.6 | 396.2 | 2,933 |
 
-All cases converged (`true ||b-Ax||/||b|| < 2e-10`).
+すべてのケースで収束を確認（`true ||b-Ax||/||b|| < 2e-10`）。
 
-### Comparison with IC Preconditioner (ABMC-ICCG)
+### IC前処理との比較 (ABMC-ICCG)
 
-IC (Incomplete Cholesky) preconditioner with ABMC (Algebraic Block Multi-Color)
-parallel ordering. 30 kHz, tol=1e-10, maxiter=20,000.
+IC（不完全コレスキー分解）前処理にABMC（代数的ブロックマルチカラー）
+並列順序付けを適用。30 kHz、tol=1e-10、maxiter=20,000。
 
 | Mesh | DOFs | Method | Iters | Total [s] | Status |
 |------|------|--------|-------|-----------|--------|
 | mesh1_3.5T | 197k | Compact AMS + COCR | 168 | 7.2 | converged |
 | mesh1_3.5T | 197k | ABMC-ICCG | 17,178 | 438.4 | not converged (res=2.8e-10) |
 
-IC preconditioner cannot handle the curl-curl null space inherent in HCurl discretizations.
-AMS resolves this with gradient and nodal auxiliary space corrections (Hiptmair-Xu 2007).
+IC前処理はHCurl離散化に固有のcurl-curl零空間を処理できない。
+AMSは勾配および節点補助空間補正によりこれを解決する（Hiptmair-Xu 2007）。
 
-### Comparison with EMD Preconditioner (Hiruma SA-26-001)
+### AMS vs ICCGのスケーリング（鉄心渦電流問題）
 
-EMD (Edge-based Magnetic field Decomposition) paper results
-(Hiruma, SA-26-001, 3,670,328 DOFs, 30 kHz):
+材料コントラストを含む鉄心渦電流問題における Compact AMS + COCR と ICCG の比較
+（mu_r=1000 鉄心、sigma=1e6 S/m、エアギャップ付き、30 kHz）。
+
+このベンチマークはAMSの主要な利点である**メッシュサイズに依存しない反復回数**を示す。
+
+| Mesh | HCurl DOFs | Method | Iters | Solve [s] | Notes |
+|------|-----------|--------|-------|-----------|-------|
+| Small | 2,728 | ICCG | 97 | 0.03 | |
+| Small | 2,728 | AMS + COCR | 46 | 0.11 | 1.5x fewer iters |
+| Medium | 6,382 | ICCG | 147 | 0.09 | |
+| Medium | 6,382 | AMS + COCR | 52 | 0.13 | 2.8x fewer iters |
+| Large | 19,357 | ICCG | 234 | 0.59 | |
+| Large | 19,357 | AMS + COCR | 52 | 0.23 | **4.5x fewer iters, 2.6x faster** |
+
+**主な観察結果**:
+
+1. **AMS反復回数は安定**（46 → 52 → 52）、メッシュサイズに依存しない
+2. **ICCG反復回数は増加**（97 → 147 → 234）、メッシュ細分化に伴いO(h^{-1})スケーリング
+3. **AMSの計算時間面での優位性は問題サイズとともに拡大** -- 19K自由度でAMSは既に2.6倍高速
+4. より大規模な問題（>100K自由度）では、ICCGの反復増加によりAMSが不可欠となる（上記IC前処理との比較を参照：197K自由度で17,178反復）
+
+設定: `maxh` = 0.08/0.06/0.04、`order=1`、`nograds=True`、`tol=1e-8`、`maxiter=10000`。
+
+### EMD前処理との比較 (Hiruma SA-26-001)
+
+EMD（辺ベース磁場分解法）の論文結果
+(Hiruma, SA-26-001, 3,670,328自由度, 30 kHz)：
 
 | Method | Iters | Time [s] | ms/iter |
 |--------|-------|----------|---------|
@@ -542,10 +565,10 @@ EMD (Edge-based Magnetic field Decomposition) paper results
 | EMD (IC + AMG W-cycle) | 2,935 | 1552.9 | 529.1 |
 | EMD (IC + GenEO-DDM, 24 domains) | 1,004 | 550.8 | 548.6 |
 
-Our result at 1.44M DOFs (mesh1_20.5T): 499 iter, 222.6s on 8 CPU cores.
-Direct DOF-matched comparison is not possible (1.44M vs 3.67M DOFs).
+本手法の 1.44M自由度 (mesh1_20.5T) での結果: 499反復、222.6秒（8 CPUコア）。
+自由度数が異なるため（1.44M vs 3.67M）、直接比較はできない。
 
-## References
+## 参考文献
 
 - R. Hiptmair, J. Xu. "Nodal Auxiliary Space Preconditioning in H(curl) and H(div) Spaces."
   SIAM J. Numer. Anal. 45(6), 2007.
@@ -557,7 +580,7 @@ Direct DOF-matched comparison is not possible (1.44M vs 3.67M DOFs).
 - T. Sogabe, S.-L. Zhang. "A COCR method for solving complex symmetric linear systems."
   J. Comput. Appl. Math. 199(2), 2007.
 
-## Benchmark Reproduction
+## ベンチマークの再現方法
 
 ```bash
 cd examples/hiruma
