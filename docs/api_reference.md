@@ -431,7 +431,7 @@ inv = CGSolver(a.mat, pre, conjugate=False, maxiter=500, tol=1e-8)
 ## GMRESSolver
 
 Left-preconditioned GMRES (Generalized Minimal Residual) solver. Native C++ implementation.
-Supports non-symmetric matrices. Use in combination with non-symmetric preconditioners such as HYPRE AMS.
+Supports non-symmetric matrices. Use when the preconditioner is non-symmetric.
 
 **Note**: For symmetric preconditioners (IC, SGS, Compact AMS), CG or COCR is recommended.
 Use GMRES only when the preconditioner is non-symmetric.

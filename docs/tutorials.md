@@ -304,7 +304,7 @@ Setting `conjugate=True` will cause divergence.
 
 **Solver selection**:
 - **COCR** (recommended): Optimal for complex symmetric systems. Use with symmetric preconditioners (IC, Compact AMS)
-- **GMRES**: Use only when the preconditioner is non-symmetric (e.g., HYPRE AMS)
+- **GMRES**: Use only when the preconditioner is non-symmetric
 
 ---
 

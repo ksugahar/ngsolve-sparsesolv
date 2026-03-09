@@ -6,7 +6,7 @@
 /// @brief SparseSolv iterative solvers as NGSolve BaseMatrix wrappers
 ///
 /// Separated from sparsesolv_precond.hpp for clarity of responsibility:
-/// - sparsesolv_precond.hpp: preconditioners (IC, SGS, BDDC)
+/// - sparsesolv_precond.hpp: preconditioners (IC, SGS, Compact AMS)
 /// - sparsesolv_solvers.hpp: iterative solvers (SparseSolvSolver, COCRSolverNGS, GMRESSolverNGS)
 
 #ifndef NGSOLVE_SPARSESOLV_SOLVERS_HPP

@@ -74,15 +74,12 @@ This benchmark demonstrates the key advantage of AMS: **mesh-size independent it
 | Medium | 6,382 | AMS + COCR | 52 | 0.13 | 2.8x fewer iters |
 | Large | 19,357 | ICCG | 234 | 0.59 | |
 | Large | 19,357 | AMS + COCR | 52 | 0.23 | **4.5x fewer iters, 2.6x faster** |
-| Any | Any | BDDC | -- | -- | Not available for complex matrices |
-
 **Key observations**:
 
 1. **AMS iteration count is stable** (46 → 52 → 52) regardless of mesh size
 2. **ICCG iteration count grows** (97 → 147 → 234) as mesh is refined — O(h^{-1}) scaling
 3. **AMS wall time advantage increases with problem size** — at 19K DOFs, AMS is already 2.6x faster
-4. **BDDC** (`inverse="bddc"`) is not available for complex-valued HCurl matrices in NGSolve
-5. For larger problems (>100K DOFs), the ICCG iteration growth makes AMS essential (see Section 2: 17,178 iters at 197K DOFs)
+4. For larger problems (>100K DOFs), the ICCG iteration growth makes AMS essential (see Section 2: 17,178 iters at 197K DOFs)
 
 Setup: `maxh` = 0.08/0.06/0.04, `order=1`, `nograds=True`, `tol=1e-8`, `maxiter=10000`.
 

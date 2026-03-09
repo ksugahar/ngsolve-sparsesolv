@@ -664,7 +664,7 @@ This section records improvements made based on implementation review.
 
 ## Acknowledgements
 
-The ABMC ordering implementation is based on code provided by Yuki Tsurutani (Fukuoka University) at [JP-MARs/SparseSolv](https://github.com/JP-MARs/SparseSolv). This code implements the ABMC method [1] and SGS-MRTR preconditioning research from the group of Takeshi Iwashita (Kyoto University). This repository adds its own extensions including header-only restructuring, NGSolve integration, auto-shift IC, and BDDC preconditioning.
+The ABMC ordering implementation is based on code provided by Yuki Tsurutani (Fukuoka University) at [JP-MARs/SparseSolv](https://github.com/JP-MARs/SparseSolv). This code implements the ABMC method [1] and SGS-MRTR preconditioning research from the group of Takeshi Iwashita (Kyoto University). This repository adds its own extensions including header-only restructuring, NGSolve integration, auto-shift IC, Compact AMS preconditioning, and COCR solver.
 
 ---
 

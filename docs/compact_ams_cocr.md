@@ -1,7 +1,7 @@
 # Compact AMS + COCR Solver
 
 Header-only C++ preconditioner + Krylov solver for HCurl problems.
-No external dependency (HYPRE not required). All parallelism via NGSolve TaskManager.
+No external dependency. All parallelism via NGSolve TaskManager.
 
 Supports both **real** (magnetostatics) and **complex** (eddy current) systems.
 `Update()` method enables Newton iteration for nonlinear problems.

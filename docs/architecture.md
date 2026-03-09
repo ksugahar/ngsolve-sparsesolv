@@ -30,7 +30,7 @@ ngsolve-sparsesolv/
 │   │   ├── cg_solver.hpp         # Conjugate Gradient (CG)
 │   │   └── sgs_mrtr_solver.hpp   # SGS-MRTR (split formula)
 │   └── ngsolve/                  # NGSolve integration layer
-│       ├── sparsesolv_precond.hpp # BaseMatrix wrappers (IC, SGS, BDDC, Solver)
+│       ├── sparsesolv_precond.hpp # BaseMatrix wrappers (IC, SGS, Compact AMS, Solver)
 │       └── sparsesolv_python_export.hpp # pybind11 bindings + factory functions
 ├── ngsolve/
 │   └── python_module.cpp         # pybind11 module entry point
@@ -184,5 +184,4 @@ py::class_<CompactAMS, shared_ptr<CompactAMS>, BaseMatrix>
 m.def("CompactAMSPreconditioner", [...] -> shared_ptr<CompactAMS> { ... });
 ```
 
-For details on the BDDC algorithm, see [algorithms.md](algorithms.md).
-It uses NGSolve's built-in BDDC (`a.mat.Inverse(fes.FreeDofs(), inverse="bddc")`).
+For algorithm details, see [algorithms.md](algorithms.md).
