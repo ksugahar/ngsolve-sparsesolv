@@ -1,28 +1,31 @@
 """
 Build monolithic ngsolve-sparsesolv wheel.
 
-This script:
-1. Clones official NGSolve at the version pinned in NGSOLVE_VERSION
-2. Applies SetGeomInfo patch to netgen submodule
-3. Copies SparseSolv source into the ngsolve tree
-4. Patches ngsolve's CMakeLists.txt and setup.py
-5. Builds a single wheel containing netgen + ngsolve + sparsesolv_ngsolve
+Strategy: Build netgen and ngsolve as separate wheels first, install them,
+then build sparsesolv standalone against the installed ngsolve, and finally
+merge everything into a single wheel.
+
+This avoids Windows DLL template export issues that occur when building
+sparsesolv inside the ngsolve CMake tree.
 
 Usage:
     python scripts/build_monolithic.py [--skip-clone] [--skip-patch]
 
 Requirements:
-    pip install build scikit-build wheel numpy pybind11-stubgen==2.5
-    pip install netgen-occt-devel==7.8.1 netgen-occt==7.8.1
+    pip install build scikit-build scikit-build-core wheel numpy "pybind11-stubgen==2.5"
+    pip install "netgen-occt-devel==7.8.1" "netgen-occt==7.8.1"
+    pip install packaging requests
     pip install mkl-devel mkl intel-cmplr-lib-rt
 """
 
 import argparse
 import os
-import platform
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import zipfile
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -65,7 +68,7 @@ def clone_ngsolve(version, skip=False):
 
 
 def apply_patches(skip=False):
-    """Apply SetGeomInfo and MSVC patches to netgen submodule."""
+    """Apply SetGeomInfo patch to netgen submodule."""
     if skip:
         print("Skipping patches (--skip-patch)")
         return
@@ -90,200 +93,10 @@ def apply_patches(skip=False):
             print(f"  Patch already applied or not applicable, skipping.")
 
 
-def copy_sparsesolv():
-    """Copy SparseSolv source into the ngsolve tree."""
-    sparsesolv_dest = NGSOLVE_SRC / "sparsesolv"
-    if sparsesolv_dest.exists():
-        shutil.rmtree(sparsesolv_dest)
-    sparsesolv_dest.mkdir()
-
-    # Copy headers
-    src_include = REPO_ROOT / "include"
-    dst_include = sparsesolv_dest / "include"
-    shutil.copytree(src_include, dst_include)
-    print(f"Copied headers: {src_include} -> {dst_include}")
-
-    # Copy pybind11 module source
-    src_module = REPO_ROOT / "ngsolve" / "python_module.cpp"
-    shutil.copy2(src_module, sparsesolv_dest / "python_module.cpp")
-    print(f"Copied: {src_module}")
-
-    # Copy type stubs and py.typed
-    for f in ["sparsesolv_ngsolve.pyi", "py.typed"]:
-        src = REPO_ROOT / f
-        if src.exists():
-            shutil.copy2(src, sparsesolv_dest / f)
-            print(f"Copied: {src}")
-
-    # Create CMakeLists.txt for sparsesolv inside ngsolve tree
-    cmake_content = _generate_sparsesolv_cmake()
-    (sparsesolv_dest / "CMakeLists.txt").write_text(cmake_content)
-    print(f"Created: {sparsesolv_dest / 'CMakeLists.txt'}")
-
-
-def _generate_sparsesolv_cmake():
-    """Generate CMakeLists.txt for building sparsesolv inside ngsolve tree."""
-    return r"""# sparsesolv/CMakeLists.txt -- SparseSolv module built inside ngsolve tree
-# Produces sparsesolv_ngsolve.pyd alongside ngsolve
-
-if(NETGEN_USE_PYTHON)
-    add_library(sparsesolv_ngsolve SHARED python_module.cpp)
-
-    find_package(Python3 REQUIRED COMPONENTS Development)
-    target_link_libraries(sparsesolv_ngsolve PRIVATE Python3::Module)
-    # On Windows, DLL symbols are not re-exported transitively.
-    # Must explicitly link against each NGSolve library whose symbols we reference.
-    target_link_libraries(sparsesolv_ngsolve PUBLIC ngsolve ngcomp ngfem ngla ngbla ngstd)
-
-    set_target_properties(sparsesolv_ngsolve PROPERTIES
-        PREFIX ""
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-    )
-
-    if(WIN32)
-        set_target_properties(sparsesolv_ngsolve PROPERTIES SUFFIX ".pyd")
-    else()
-        set_target_properties(sparsesolv_ngsolve PROPERTIES SUFFIX ".so")
-    endif()
-
-    target_include_directories(sparsesolv_ngsolve PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-    )
-
-    if(MSVC)
-        target_compile_options(sparsesolv_ngsolve PRIVATE /arch:AVX2 /bigobj)
-    else()
-        target_compile_options(sparsesolv_ngsolve PRIVATE -mavx2 -mfma)
-    endif()
-
-    target_compile_definitions(sparsesolv_ngsolve PRIVATE
-        SPARSESOLV_USE_NGSOLVE_TASKMANAGER
-    )
-
-    if(USE_MKL)
-        if(MKL_INCLUDE_DIR)
-            target_include_directories(sparsesolv_ngsolve PRIVATE ${MKL_INCLUDE_DIR})
-        endif()
-        if(MKL_LIBRARY)
-            target_link_libraries(sparsesolv_ngsolve PRIVATE ${MKL_LIBRARY})
-        endif()
-        target_compile_definitions(sparsesolv_ngsolve PRIVATE SPARSESOLV_USE_MKL)
-    endif()
-
-    # Install .pyd into sparsesolv_ngsolve/ package directory
-    install(TARGETS sparsesolv_ngsolve
-        LIBRARY DESTINATION ${NGSOLVE_INSTALL_DIR_PYTHON}/sparsesolv_ngsolve
-        RUNTIME DESTINATION ${NGSOLVE_INSTALL_DIR_PYTHON}/sparsesolv_ngsolve
-        COMPONENT ngsolve
-    )
-
-    # Generate and install __init__.py
-    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/__init__.py"
-         "from .sparsesolv_ngsolve import *\n")
-    install(FILES "${CMAKE_CURRENT_BINARY_DIR}/__init__.py"
-            DESTINATION ${NGSOLVE_INSTALL_DIR_PYTHON}/sparsesolv_ngsolve
-            COMPONENT ngsolve)
-
-    # Install type stubs
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/sparsesolv_ngsolve.pyi")
-        install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/sparsesolv_ngsolve.pyi"
-                DESTINATION ${NGSOLVE_INSTALL_DIR_PYTHON}/sparsesolv_ngsolve
-                RENAME __init__.pyi
-                COMPONENT ngsolve)
-    endif()
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/py.typed")
-        install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/py.typed"
-                DESTINATION ${NGSOLVE_INSTALL_DIR_PYTHON}/sparsesolv_ngsolve
-                COMPONENT ngsolve)
-    endif()
-
-    message(STATUS "SparseSolv: building sparsesolv_ngsolve module")
-endif()
-"""
-
-
-def patch_ngsolve_cmake():
-    """Add add_subdirectory(sparsesolv) to ngsolve's CMakeLists.txt."""
-    cmake_path = NGSOLVE_SRC / "CMakeLists.txt"
-    content = cmake_path.read_text()
-
-    marker = "add_subdirectory(sparsesolv)"
-    if marker in content:
-        print("CMakeLists.txt already patched.")
-        return
-
-    # Add after add_subdirectory(emscripten) -- last existing subdirectory
-    old = "add_subdirectory(emscripten)"
-    new = f"add_subdirectory(emscripten)\nadd_subdirectory(sparsesolv)"
-
-    if old not in content:
-        # Fallback: add at the very end
-        content += f"\n{marker}\n"
-    else:
-        content = content.replace(old, new, 1)
-
-    cmake_path.write_text(content)
-    print("Patched CMakeLists.txt: added add_subdirectory(sparsesolv)")
-
-
-def patch_ngsolve_setup():
-    """Patch setup.py to change package name to ngsolve-sparsesolv."""
-    setup_path = NGSOLVE_SRC / "setup.py"
-    content = setup_path.read_text()
-
-    # Change name from 'ngsolve' to 'ngsolve-sparsesolv'
-    # Two locations in setup.py where name is set
-    replacements = [
-        (
-            'name = netgen_name.replace("netgen-mesher", "ngsolve")',
-            f'name = "{PACKAGE_NAME}"',
-        ),
-        (
-            "name = 'ngsolve'",
-            f"name = '{PACKAGE_NAME}'",
-        ),
-        (
-            'description="NGSolve"',
-            f'description="NGSolve + SparseSolv: MKL build, SetGeomInfo, Compact AMS/COCR solvers"',
-        ),
-    ]
-
-    for old, new in replacements:
-        if old in content:
-            content = content.replace(old, new, 1)
-            print(f"  Replaced: {old[:60]}...")
-
-    # Remove the PyPI version check (we're a different package)
-    # Remove lines 57-69 that check if version exists on pypi
-    lines = content.split('\n')
-    filtered = []
-    skip = False
-    for line in lines:
-        if '# check if release already exists on pypi' in line:
-            skip = True
-        elif skip and line.startswith('except'):
-            # Keep going until we find the 'pass' after except
-            filtered.append(line)
-            continue
-        elif skip and line.strip() == 'pass':
-            skip = False
-            filtered.append(line)
-            continue
-        elif skip:
-            continue
-        else:
-            filtered.append(line)
-    content = '\n'.join(filtered)
-
-    setup_path.write_text(content)
-    print("Patched setup.py: changed package name and removed PyPI check")
-
-
 def build_netgen():
     """Build and install netgen from the submodule."""
     netgen_dir = NGSOLVE_SRC / "external_dependencies" / "netgen"
-    print("Building netgen...")
+    print("\n=== Building netgen ===")
     subprocess.check_call(
         [sys.executable, "-m", "build", "--wheel", "--no-isolation"],
         cwd=str(netgen_dir),
@@ -296,36 +109,169 @@ def build_netgen():
         [sys.executable, "-m", "pip", "install", str(wheels[0]), "--force-reinstall"],
     )
     print(f"Installed netgen: {wheels[0].name}")
+    return wheels[0]
 
 
-def build_ngsolve_sparsesolv():
-    """Build the monolithic ngsolve-sparsesolv wheel."""
-    print("Building ngsolve-sparsesolv wheel...")
+def build_ngsolve():
+    """Build and install ngsolve (without sparsesolv)."""
+    print("\n=== Building ngsolve ===")
     subprocess.check_call(
         [sys.executable, "-m", "build", "--wheel", "--no-isolation"],
         cwd=str(NGSOLVE_SRC),
     )
-    # Copy wheels to dist/
-    DIST_DIR.mkdir(exist_ok=True)
-    for whl in (NGSOLVE_SRC / "dist").glob("*.whl"):
-        dest = DIST_DIR / whl.name
-        shutil.copy2(whl, dest)
-        print(f"Output: {dest}")
-
-
-def verify():
-    """Verify the built wheel contains all expected modules."""
-    import zipfile
-
-    wheels = list(DIST_DIR.glob("ngsolve*sparsesolv*.whl"))
+    wheels = list((NGSOLVE_SRC / "dist").glob("*.whl"))
     if not wheels:
-        print("WARNING: No wheel found in dist/")
-        return False
+        raise RuntimeError("No ngsolve wheel found!")
+    # Install the ngsolve wheel
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", str(wheels[0]), "--force-reinstall"],
+    )
+    print(f"Installed ngsolve: {wheels[0].name}")
+    return wheels[0]
 
-    whl = wheels[-1]
-    print(f"\nVerifying wheel: {whl.name}")
 
-    with zipfile.ZipFile(whl, 'r') as z:
+def build_sparsesolv():
+    """Build sparsesolv standalone against installed ngsolve."""
+    print("\n=== Building sparsesolv (standalone) ===")
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", str(REPO_ROOT), "-v"],
+    )
+    print("SparseSolv installed.")
+
+    # Find the installed sparsesolv files
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "import sparsesolv_ngsolve; import os; print(os.path.dirname(sparsesolv_ngsolve.__file__))"],
+        capture_output=True, text=True,
+    )
+    sparsesolv_dir = Path(result.stdout.strip())
+    print(f"SparseSolv installed at: {sparsesolv_dir}")
+    return sparsesolv_dir
+
+
+def merge_into_wheel(ngsolve_wheel, sparsesolv_dir):
+    """Merge sparsesolv files into the ngsolve wheel, rename to ngsolve-sparsesolv."""
+    print("\n=== Merging into monolithic wheel ===")
+    DIST_DIR.mkdir(exist_ok=True)
+
+    # Read ngsolve wheel version from filename
+    # e.g., ngsolve-6.2.2601-cp312-cp312-win_amd64.whl
+    ngsolve_whl_name = ngsolve_wheel.name
+    # Extract version and platform tags
+    parts = ngsolve_whl_name.replace(".whl", "").split("-")
+    # parts: [name, version, pythonver, abi, platform]
+    ngsolve_version = parts[1]
+    py_tag = parts[2]
+    abi_tag = parts[3]
+    plat_tag = parts[4]
+
+    # Read sparsesolv version from our pyproject.toml
+    import tomllib
+    with open(REPO_ROOT / "pyproject.toml", "rb") as f:
+        pyproject = tomllib.load(f)
+    sparsesolv_version = pyproject["project"]["version"]
+
+    # Combined version: sparsesolv_version+ngsolve_version
+    # e.g., 3.0.0+ngsolve6.2.2601
+    combined_version = f"{sparsesolv_version}"
+
+    out_name = f"ngsolve_sparsesolv-{combined_version}-{py_tag}-{abi_tag}-{plat_tag}.whl"
+    out_path = DIST_DIR / out_name
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+
+        # Extract ngsolve wheel
+        print(f"  Extracting: {ngsolve_wheel.name}")
+        with zipfile.ZipFile(ngsolve_wheel, 'r') as z:
+            z.extractall(tmpdir)
+
+        # Copy sparsesolv_ngsolve package
+        dest_sparsesolv = tmpdir / "sparsesolv_ngsolve"
+        if dest_sparsesolv.exists():
+            shutil.rmtree(dest_sparsesolv)
+        shutil.copytree(sparsesolv_dir, dest_sparsesolv)
+        print(f"  Added: sparsesolv_ngsolve/")
+
+        # Update METADATA
+        dist_info_dirs = list(tmpdir.glob("*.dist-info"))
+        if dist_info_dirs:
+            old_dist_info = dist_info_dirs[0]
+            new_dist_info_name = f"ngsolve_sparsesolv-{combined_version}.dist-info"
+            new_dist_info = tmpdir / new_dist_info_name
+
+            # Rename dist-info directory
+            old_dist_info.rename(new_dist_info)
+
+            # Update METADATA file
+            metadata_path = new_dist_info / "METADATA"
+            if metadata_path.exists():
+                content = metadata_path.read_text(encoding="utf-8")
+                content = re.sub(r"^Name: .*$", f"Name: {PACKAGE_NAME}", content, flags=re.MULTILINE)
+                content = re.sub(r"^Version: .*$", f"Version: {combined_version}", content, flags=re.MULTILINE)
+                # Add mkl dependency if not present
+                if "mkl" not in content:
+                    content += "Requires-Dist: mkl>=2024.2.0\n"
+                    content += "Requires-Dist: intel-cmplr-lib-rt\n"
+                metadata_path.write_text(content, encoding="utf-8")
+                print(f"  Updated METADATA: {PACKAGE_NAME} {combined_version}")
+
+            # Update WHEEL file
+            wheel_path = new_dist_info / "WHEEL"
+            if wheel_path.exists():
+                content = wheel_path.read_text(encoding="utf-8")
+                # Keep existing content (tags, generator, etc.)
+                wheel_path.write_text(content, encoding="utf-8")
+
+            # Regenerate RECORD
+            record_path = new_dist_info / "RECORD"
+            _generate_record(tmpdir, record_path, new_dist_info_name)
+
+        # Create the merged wheel
+        print(f"  Creating: {out_name}")
+        with zipfile.ZipFile(out_path, 'w', zipfile.ZIP_DEFLATED) as zout:
+            for file_path in sorted(tmpdir.rglob("*")):
+                if file_path.is_file():
+                    arcname = file_path.relative_to(tmpdir).as_posix()
+                    zout.write(file_path, arcname)
+
+    print(f"  Output: {out_path}")
+    return out_path
+
+
+def _generate_record(wheel_dir, record_path, dist_info_name):
+    """Regenerate RECORD file for the wheel."""
+    import hashlib
+    import base64
+
+    records = []
+    for file_path in sorted(wheel_dir.rglob("*")):
+        if file_path.is_file():
+            arcname = file_path.relative_to(wheel_dir).as_posix()
+            if arcname == f"{dist_info_name}/RECORD":
+                records.append(f"{arcname},,")
+                continue
+            data = file_path.read_bytes()
+            digest = hashlib.sha256(data).digest()
+            b64 = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+            size = len(data)
+            records.append(f"{arcname},sha256={b64},{size}")
+
+    record_path.write_text("\n".join(records) + "\n", encoding="utf-8")
+
+
+def verify(wheel_path=None):
+    """Verify the built wheel contains all expected modules."""
+    if wheel_path is None:
+        wheels = list(DIST_DIR.glob("ngsolve*sparsesolv*.whl"))
+        if not wheels:
+            print("WARNING: No wheel found in dist/")
+            return False
+        wheel_path = wheels[-1]
+
+    print(f"\nVerifying wheel: {wheel_path.name}")
+
+    with zipfile.ZipFile(wheel_path, 'r') as z:
         names = z.namelist()
 
     has_ngsolve = any("ngsolve/" in n for n in names)
@@ -341,7 +287,9 @@ def verify():
         if n.endswith(".pyd") or n.endswith(".so"):
             print(f"    {n}")
 
-    return has_ngsolve and has_sparsesolv and has_pyd
+    ok = has_ngsolve and has_sparsesolv and has_pyd
+    print(f"  Result: {'PASS' if ok else 'FAIL'}")
+    return ok
 
 
 def main():
@@ -352,6 +300,8 @@ def main():
                         help="Skip applying patches")
     parser.add_argument("--skip-netgen", action="store_true",
                         help="Skip netgen build (use pre-installed)")
+    parser.add_argument("--skip-ngsolve", action="store_true",
+                        help="Skip ngsolve build (use pre-installed)")
     parser.add_argument("--verify-only", action="store_true",
                         help="Only verify existing wheel")
     args = parser.parse_args()
@@ -367,28 +317,34 @@ def main():
     # Step 1: Clone official NGSolve
     clone_ngsolve(version, skip=args.skip_clone)
 
-    # Step 2: Apply patches
+    # Step 2: Apply patches (SetGeomInfo to netgen)
     apply_patches(skip=args.skip_patch)
 
-    # Step 3: Copy SparseSolv into ngsolve tree
-    copy_sparsesolv()
-
-    # Step 4: Patch ngsolve build files
-    patch_ngsolve_cmake()
-    patch_ngsolve_setup()
-
-    # Step 5: Build netgen
+    # Step 3: Build and install netgen
     if not args.skip_netgen:
         build_netgen()
 
-    # Step 6: Build monolithic wheel
-    build_ngsolve_sparsesolv()
+    # Step 4: Build and install ngsolve
+    if not args.skip_ngsolve:
+        ngsolve_wheel = build_ngsolve()
+    else:
+        # Find existing ngsolve wheel
+        wheels = list((NGSOLVE_SRC / "dist").glob("ngsolve-*.whl"))
+        if not wheels:
+            raise RuntimeError("No ngsolve wheel found (--skip-ngsolve)")
+        ngsolve_wheel = wheels[0]
+
+    # Step 5: Build sparsesolv standalone (against installed ngsolve)
+    sparsesolv_dir = build_sparsesolv()
+
+    # Step 6: Merge into monolithic wheel
+    merged_wheel = merge_into_wheel(ngsolve_wheel, sparsesolv_dir)
 
     # Step 7: Verify
-    verify()
+    verify(merged_wheel)
 
     print("\nBuild complete!")
-    print(f"Wheels are in: {DIST_DIR}")
+    print(f"Wheel: {merged_wheel}")
 
 
 if __name__ == "__main__":
