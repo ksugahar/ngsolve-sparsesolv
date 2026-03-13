@@ -116,17 +116,9 @@ def build_ngsolve():
     """Build and install ngsolve (without sparsesolv)."""
     print("\n=== Building ngsolve ===")
 
-    # Export ALL symbols from libngsolve.dll so that downstream pybind11
-    # modules (sparsesolv) can link against template instantiations
-    # (DifferentialOperator SIMD methods etc.) that aren't explicitly marked
-    # with __declspec(dllexport) in the NGSolve headers.
-    env = os.environ.copy()
-    env["CMAKE_ARGS"] = env.get("CMAKE_ARGS", "") + " -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON"
-
     subprocess.check_call(
         [sys.executable, "-m", "build", "--wheel", "--no-isolation"],
         cwd=str(NGSOLVE_SRC),
-        env=env,
     )
     wheels = list((NGSOLVE_SRC / "dist").glob("*.whl"))
     if not wheels:

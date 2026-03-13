@@ -87,6 +87,17 @@ if paths: print(paths[0])
     message(STATUS "Found MKL: ${MKL_ROOT}")
 
     add_ngsolve_python_module(sparsesolv_ngsolve ngsolve/python_module.cpp)
+
+    # Stubs for DifferentialOperator SIMD virtual methods that may not be
+    # exported from libngsolve.dll when built via scikit-build on Windows.
+    # The stubs file is compiled with NGS_EXPORTS defined so that
+    # NGS_DLL_HEADER expands to dllexport (providing local definitions).
+    if(MSVC)
+        target_sources(sparsesolv_ngsolve PRIVATE ngsolve/diffop_simd_stubs.cpp)
+        set_source_files_properties(ngsolve/diffop_simd_stubs.cpp PROPERTIES
+            COMPILE_DEFINITIONS "NGS_EXPORTS")
+    endif()
+
     target_include_directories(sparsesolv_ngsolve PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
