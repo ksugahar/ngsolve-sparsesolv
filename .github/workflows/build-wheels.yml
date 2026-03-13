@@ -28,7 +28,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install build scikit-build scikit-build-core wheel numpy "pybind11-stubgen==2.5"
           pip install "netgen-occt-devel==7.8.1" "netgen-occt==7.8.1"
-          pip install packaging requests pybind11
+          pip install packaging requests pybind11 tomli
           pip install mkl-devel mkl intel-cmplr-lib-rt
 
       - name: Build monolithic wheel

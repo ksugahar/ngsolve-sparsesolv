@@ -140,12 +140,26 @@ def build_sparsesolv():
     print("SparseSolv installed.")
 
     # Find the installed sparsesolv files
+    # Try import first, fall back to pip show + site-packages scan
     result = subprocess.run(
         [sys.executable, "-c",
          "import sparsesolv_ngsolve; import os; print(os.path.dirname(sparsesolv_ngsolve.__file__))"],
         capture_output=True, text=True,
     )
-    sparsesolv_dir = Path(result.stdout.strip())
+    sparsesolv_dir = Path(result.stdout.strip()) if result.stdout.strip() else None
+
+    if not sparsesolv_dir or not sparsesolv_dir.exists() or str(sparsesolv_dir) == ".":
+        # Fallback: find via site-packages
+        result2 = subprocess.run(
+            [sys.executable, "-c",
+             "import site; print(site.getsitepackages()[0])"],
+            capture_output=True, text=True,
+        )
+        site_packages = Path(result2.stdout.strip())
+        sparsesolv_dir = site_packages / "sparsesolv_ngsolve"
+        if not sparsesolv_dir.exists():
+            raise RuntimeError(f"Cannot find sparsesolv_ngsolve in {site_packages}")
+
     print(f"SparseSolv installed at: {sparsesolv_dir}")
     return sparsesolv_dir
 
@@ -167,7 +181,10 @@ def merge_into_wheel(ngsolve_wheel, sparsesolv_dir):
     plat_tag = parts[4]
 
     # Read sparsesolv version from our pyproject.toml
-    import tomllib
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        import tomli as tomllib  # Python 3.10 fallback
     with open(REPO_ROOT / "pyproject.toml", "rb") as f:
         pyproject = tomllib.load(f)
     sparsesolv_version = pyproject["project"]["version"]
@@ -210,10 +227,25 @@ def merge_into_wheel(ngsolve_wheel, sparsesolv_dir):
                 content = metadata_path.read_text(encoding="utf-8")
                 content = re.sub(r"^Name: .*$", f"Name: {PACKAGE_NAME}", content, flags=re.MULTILINE)
                 content = re.sub(r"^Version: .*$", f"Version: {combined_version}", content, flags=re.MULTILINE)
+
+                # Remove bundled package dependencies (netgen/ngsolve are inside this wheel)
+                bundled_patterns = [
+                    r"^Requires-Dist: netgen-mesher.*$\n?",
+                    r"^Requires-Dist: netgen-occt.*$\n?",
+                    r"^Requires-Dist: ngsolve.*$\n?",
+                    r"^Requires-Dist: pyngcore.*$\n?",
+                ]
+                for pat in bundled_patterns:
+                    content = re.sub(pat, "", content, flags=re.MULTILINE)
+                print("  Removed bundled package dependencies from METADATA")
+
                 # Add mkl dependency if not present
                 if "mkl" not in content:
                     content += "Requires-Dist: mkl>=2024.2.0\n"
                     content += "Requires-Dist: intel-cmplr-lib-rt\n"
+                # Add numpy dependency if not present
+                if "numpy" not in content:
+                    content += "Requires-Dist: numpy\n"
                 metadata_path.write_text(content, encoding="utf-8")
                 print(f"  Updated METADATA: {PACKAGE_NAME} {combined_version}")
 
