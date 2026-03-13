@@ -92,7 +92,7 @@ Users should migrate to `pip install ngsolve-sparsesolv`.
 The SetGeomInfo API adds `Element2d.SetGeomInfo(vertex_index, u, v)` to Netgen,
 enabling high-order mesh curving for externally imported meshes (from Cubit, GMSH).
 
-- **PR**: https://github.com/NGSolve/netgen/pull/86
+- **PR**: https://github.com/NGSolve/netgen/pull/232
 - **Patch**: `patches/netgen-setgeominfo.patch`
 - **Status**: Pending upstream adoption
 - **When merged**: Delete the patch file, update this section
