@@ -131,7 +131,9 @@ if(NETGEN_USE_PYTHON)
 
     find_package(Python3 REQUIRED COMPONENTS Development)
     target_link_libraries(sparsesolv_ngsolve PRIVATE Python3::Module)
-    target_link_libraries(sparsesolv_ngsolve PUBLIC ngsolve)
+    # On Windows, DLL symbols are not re-exported transitively.
+    # Must explicitly link against each NGSolve library whose symbols we reference.
+    target_link_libraries(sparsesolv_ngsolve PUBLIC ngsolve ngcomp ngfem ngla ngbla ngstd)
 
     set_target_properties(sparsesolv_ngsolve PROPERTIES
         PREFIX ""
