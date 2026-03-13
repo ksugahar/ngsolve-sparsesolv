@@ -60,3 +60,4 @@ results_*.json
 
 # Internal review documents
 review_report.md
+build-monolithic/

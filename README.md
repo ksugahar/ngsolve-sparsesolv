@@ -1,17 +1,20 @@
-# SparseSolv — NGSolve HCurl問題向けヘッダオンリーAMS前処理
+# ngsolve-sparsesolv — NGSolve + SparseSolv モノリシックパッケージ
 
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
+[![PyPI](https://img.shields.io/pypi/v/ngsolve-sparsesolv)](https://pypi.org/project/ngsolve-sparsesolv/)
 
 **渦電流問題でICCGの60倍少ない反復回数。外部依存なし。**
 
-[NGSolve](https://ngsolve.org/) 有限要素解析向けのヘッダオンリーC++17反復法ソルバーライブラリ。
-HCurl curl-curl問題（静磁界・渦電流）向けのCompact AMS前処理、
-IC/SGS前処理＋ABMC並列三角求解、COCR/GMRESクリロフソルバーを提供。
+公式 [NGSolve](https://ngsolve.org/) に追随しつつ、以下の付加価値を提供するモノリシックパッケージ:
 
-`double` と `std::complex<double>` の両方に対応し、NGSolveソースツリーから独立した
-pybind11拡張モジュール (`sparsesolv_ngsolve`) として提供。
+1. **Intel MKL build** — MKL BLAS/LAPACK + PARDISO直接法
+2. **SetGeomInfo API** — 外部メッシュ（Cubit, GMSH）の高次曲面要素対応 (PR#86)
+3. **SparseSolv** — Compact AMS, COCR等のHCurl向け反復法ソルバー
 
-[JP-MARs/SparseSolv](https://github.com/JP-MARs/SparseSolv) からのフォーク。
+`pip install ngsolve-sparsesolv` で netgen + ngsolve + sparsesolv_ngsolve が全て入る。
+
+SparseSolvは [JP-MARs/SparseSolv](https://github.com/JP-MARs/SparseSolv) からのフォーク。
+ヘッダオンリーC++17、`double` と `std::complex<double>` の両方に対応。
 
 ## 主な特徴
 
@@ -122,39 +125,38 @@ AMSは離散勾配補正とNedelec補間補正によりこれを解決する。
 
 ## インストール
 
-### ビルド済みWheel（推奨）
-
-[Releases](https://github.com/ksugahar/ngsolve-sparsesolv/releases) ページからプラットフォームに合った `.whl` ファイルをダウンロードしてインストール：
+### PyPI（推奨）
 
 ```bash
-pip install sparsesolv_ngsolve-2.6.0-cp312-cp312-win_amd64.whl
+pip install ngsolve-sparsesolv
 ```
 
-ファイル名はPythonバージョンとOSに合わせて変更すること。
+これ一つで netgen + ngsolve (MKL) + sparsesolv_ngsolve が全てインストールされる。
 
-### ソースからビルド
+> **注意**: 旧パッケージ `sparsesolv-ngsolve` は廃止。`pip install ngsolve-sparsesolv` に移行してください。
 
-[Git for Windows](https://gitforwindows.org/)（または同等品）、CMake 3.16+、
-C++17コンパイラ、NGSolve（`pip install ngsolve` またはソースビルド）が必要。
+### ソースからビルド（SparseSolv単体）
+
+既にNGSolveがインストール済みの場合、SparseSolvのみビルド可能：
 
 ```bash
+pip install ngsolve  # 公式NGSolve
 pip install git+https://github.com/ksugahar/ngsolve-sparsesolv.git
 ```
 
-または、クローンしてローカルビルド：
+### モノリシックWheel（ソースからフルビルド）
 
 ```bash
 git clone https://github.com/ksugahar/ngsolve-sparsesolv.git
 cd ngsolve-sparsesolv
-pip install .
+python scripts/build_monolithic.py
+pip install dist/ngsolve_sparsesolv-*.whl
 ```
-
-開発ビルド（editable install、手動CMake）については [docs/development.md](docs/development.md) を参照。
 
 ### 動作確認
 
 ```bash
-python -c "from sparsesolv_ngsolve import SparseSolvSolver; print('OK')"
+python -c "import ngsolve; from sparsesolv_ngsolve import SparseSolvSolver; print('OK')"
 ```
 
 ## NGSolveでの使用
@@ -304,7 +306,6 @@ auto result = sparsesolv::solve_iccg(A, b, x, size, config);
 
 ```
 ngsolve-sparsesolv/
-├── docs/                        # ドキュメント
 ├── include/sparsesolv/         # ヘッダオンリーライブラリ
 │   ├── sparsesolv.hpp          # メインヘッダ
 │   ├── core/                   # 型定義、設定、行列ビュー
@@ -318,15 +319,19 @@ ngsolve-sparsesolv/
 │   │   └── complex_compact_ams.hpp        # Re/Im融合ComplexCompactAMS
 │   ├── solvers/                # CG, COCR, SGS-MRTR実装
 │   └── ngsolve/                # NGSolve BaseMatrixラッパー + pybind11
+├── patches/                    # 本家への適用パッチ
+│   └── netgen-setgeominfo.patch    # SetGeomInfo API (PR#86採択まで)
+├── scripts/
+│   └── build_monolithic.py     # モノリシックwheel構築スクリプト
 ├── examples/
 │   └── hiruma/                 # 渦電流ベンチマーク (30 kHz)
-│       ├── bench_compact_ams.py    # Compact AMS + COCRベンチマーク
-│       ├── bench_ams_vs_abmc.py    # AMS vs ABMC-ICCG比較
-│       └── eddy_current.py         # 渦電流解析
 ├── tests/
 │   └── test_sparsesolv.py      # ソルバー・前処理テスト
+├── docs/                       # ドキュメント
+├── NGSOLVE_VERSION             # 追随する公式NGSolveバージョン
 ├── sparsesolv_ngsolve.pyi      # Python型スタブ
-├── CMakeLists.txt
+├── CMakeLists.txt              # SparseSolv独立ビルド
+├── CLAUDE.md                   # 開発ポリシー
 └── LICENSE
 ```
 

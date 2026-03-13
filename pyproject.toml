@@ -3,13 +3,17 @@ requires = ["scikit-build-core>=0.10", "pybind11", "ngsolve"]
 build-backend = "scikit_build_core.build"
 
 [project]
-name = "sparsesolv-ngsolve"
-version = "2.6.0"
-description = "SparseSolv iterative solvers for NGSolve"
+name = "ngsolve-sparsesolv"
+version = "3.0.0"
+description = "NGSolve + SparseSolv: MKL build, SetGeomInfo, Compact AMS/COCR solvers"
 readme = "README.md"
 license = {text = "MPL-2.0"}
 requires-python = ">=3.10"
-dependencies = ["ngsolve"]
+dependencies = [
+    "mkl>=2024.2.0",
+    "intel-cmplr-lib-rt",
+    "numpy",
+]
 
 [tool.scikit-build]
 cmake.build-type = "Release"

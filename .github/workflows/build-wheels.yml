@@ -1,0 +1,103 @@
+name: Build and Publish Monolithic Wheel
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build wheel (Python ${{ matrix.python-version }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+
+    steps:
+      - name: Checkout ngsolve-sparsesolv
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build scikit-build wheel numpy "pybind11-stubgen==2.5"
+          pip install "netgen-occt-devel==7.8.1" "netgen-occt==7.8.1"
+          pip install packaging requests
+          pip install mkl-devel mkl intel-cmplr-lib-rt
+
+      - name: Build monolithic wheel
+        run: python scripts/build_monolithic.py
+
+      - name: Install and test
+        run: |
+          pip install (Get-ChildItem -Path dist/*.whl).FullName --force-reinstall
+          python -c "import netgen; print('netgen OK')"
+          python -c "import ngsolve; print(f'ngsolve OK: {ngsolve.__version__}')"
+          python -c "from sparsesolv_ngsolve import CompactAMSPreconditioner; print('sparsesolv OK')"
+          python -c "
+          from netgen.meshing import Element2D
+          el = Element2D.__new__(Element2D)
+          assert hasattr(el, 'SetGeomInfo'), 'SetGeomInfo API missing!'
+          print('SetGeomInfo API: OK')
+          "
+          python -c "
+          from ngsolve import *
+          mesh = Mesh(unit_square.GenerateMesh(maxh=0.3))
+          fes = H1(mesh, order=2)
+          u, v = fes.TnT()
+          a = BilinearForm(grad(u)*grad(v)*dx).Assemble()
+          f = LinearForm(1*v*dx).Assemble()
+          gfu = GridFunction(fes)
+          gfu.vec.data = a.mat.Inverse(fes.FreeDofs()) * f.vec
+          print(f'FEM test: {fes.ndof} DOFs, max={max(gfu.vec):.6f}')
+          "
+        shell: pwsh
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.python-version }}
+          path: dist/*.whl
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      id-token: write
+    steps:
+      - name: Download all wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download all wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.whl
+          generate_release_notes: true

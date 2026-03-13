@@ -1,4 +1,4 @@
-name: Build and Test
+name: Build and Test (Standalone SparseSolv)
 
 on:
   push:
@@ -21,9 +21,8 @@ jobs:
       - name: Install dependencies
         run: pip install ngsolve pytest scikit-build-core pybind11 mkl-devel
 
-      - name: Build and install module
+      - name: Build and install SparseSolv module (standalone)
         run: pip install . -v
 
       - name: Run tests
         run: python -m pytest tests/test_sparsesolv.py -v --tb=short
-
