@@ -67,7 +67,7 @@ jobs:
 
           t0 = time.perf_counter()
           pre = CompactAMSPreconditioner(
-              a_real_mat=a2.mat, grad_mat=G,
+              mat=a2.mat, grad_mat=G,
               freedofs=fes2.FreeDofs(),
               coord_x=cx, coord_y=cy, coord_z=cz,
               cycle_type=1, print_level=0)
