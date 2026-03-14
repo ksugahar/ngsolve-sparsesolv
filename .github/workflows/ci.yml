@@ -48,8 +48,9 @@ jobs:
           gfu.vec.data = solver * f.vec
           t_iccg = time.perf_counter() - t0
 
-          print(f'ICCG: {fes.ndof} DOFs, {solver.iterations} iters, {t_iccg:.3f}s')
-          assert solver.IsConverged(), f'ICCG did not converge ({solver.iterations} iters)'
+          iccg_iters = solver.last_result.iterations
+          print(f'ICCG: {fes.ndof} DOFs, {iccg_iters} iters, {t_iccg:.3f}s')
+          assert solver.last_result.converged, f'ICCG did not converge ({iccg_iters} iters)'
 
           # --- Compact AMS + CG: 3D curl-curl (HCurl, real) ---
           mesh2 = Mesh(unit_cube.GenerateMesh(maxh=0.15))
@@ -79,7 +80,7 @@ jobs:
 
           # --- Summary ---
           print('--- Benchmark Summary ---')
-          print(f'ICCG:   {fes.ndof:>6} DOFs | {solver.iterations:>4} iters | {t_iccg:.3f}s')
+          print(f'ICCG:   {fes.ndof:>6} DOFs | {iccg_iters:>4} iters | {t_iccg:.3f}s')
           print(f'AMS+CG: {fes2.ndof:>6} DOFs | {ams_iters:>4} iters | {t_ams:.3f}s')
           "
         shell: bash
