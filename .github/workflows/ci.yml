@@ -26,3 +26,60 @@ jobs:
 
       - name: Run tests
         run: python -m pytest tests/test_sparsesolv.py -v --tb=short
+
+      - name: Benchmark (ICCG + Compact AMS)
+        run: |
+          python -c "
+          import time, json
+          from ngsolve import *
+          from sparsesolv_ngsolve import SparseSolvSolver, CompactAMSPreconditioner, COCRSolver
+
+          # --- ICCG: 3D Poisson (H1, real) ---
+          mesh = Mesh(unit_cube.GenerateMesh(maxh=0.1))
+          fes = H1(mesh, order=2, dirichlet='.*')
+          u, v = fes.TnT()
+          a = BilinearForm(grad(u)*grad(v)*dx).Assemble()
+          f = LinearForm(1*v*dx).Assemble()
+          gfu = GridFunction(fes)
+
+          t0 = time.perf_counter()
+          solver = SparseSolvSolver(a.mat, method='ICCG',
+                                    freedofs=fes.FreeDofs(), tol=1e-10, maxiter=2000)
+          gfu.vec.data = solver * f.vec
+          t_iccg = time.perf_counter() - t0
+
+          print(f'ICCG: {fes.ndof} DOFs, {solver.iterations} iters, {t_iccg:.3f}s')
+          assert solver.IsConverged(), f'ICCG did not converge ({solver.iterations} iters)'
+
+          # --- Compact AMS + CG: 3D curl-curl (HCurl, real) ---
+          mesh2 = Mesh(unit_cube.GenerateMesh(maxh=0.15))
+          fes2 = HCurl(mesh2, order=1, nograds=True, dirichlet='.*')
+          u2, v2 = fes2.TnT()
+          a2 = BilinearForm(curl(u2)*curl(v2)*dx + 1e-6*u2*v2*dx).Assemble()
+          f2 = LinearForm(CoefficientFunction((0,0,1))*v2*dx).Assemble()
+          gfu2 = GridFunction(fes2)
+
+          G, h1fes = fes2.CreateGradient()
+          cx = [mesh2.ngmesh.Points()[i+1][0] for i in range(mesh2.nv)]
+          cy = [mesh2.ngmesh.Points()[i+1][1] for i in range(mesh2.nv)]
+          cz = [mesh2.ngmesh.Points()[i+1][2] for i in range(mesh2.nv)]
+
+          t0 = time.perf_counter()
+          pre = CompactAMSPreconditioner(
+              a_real_mat=a2.mat, grad_mat=G,
+              freedofs=fes2.FreeDofs(),
+              coord_x=cx, coord_y=cy, coord_z=cz,
+              cycle_type=1, print_level=0)
+          inv = CGSolver(a2.mat, pre, tol=1e-10, maxsteps=500, freedofs=fes2.FreeDofs())
+          gfu2.vec.data = inv * f2.vec
+          t_ams = time.perf_counter() - t0
+          ams_iters = inv.GetSteps()
+
+          print(f'AMS+CG: {fes2.ndof} DOFs, {ams_iters} iters, {t_ams:.3f}s')
+
+          # --- Summary ---
+          print('--- Benchmark Summary ---')
+          print(f'ICCG:   {fes.ndof:>6} DOFs | {solver.iterations:>4} iters | {t_iccg:.3f}s')
+          print(f'AMS+CG: {fes2.ndof:>6} DOFs | {ams_iters:>4} iters | {t_ams:.3f}s')
+          "
+        shell: bash

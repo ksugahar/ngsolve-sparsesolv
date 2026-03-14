@@ -17,11 +17,35 @@ SparseSolvは [JP-MARs/SparseSolv](https://github.com/JP-MARs/SparseSolv) から
 
 ## インストール
 
+### 基本インストール
+
 ```bash
 pip install sparsesolv-ngsolve
 ```
 
 これで公式ngsolve (MKL + PARDISO付き) と sparsesolv_ngsolve が自動的にインストールされる。
+
+### SetGeomInfo API が必要な場合
+
+外部メッシュ (Coreform Cubit等) の高次曲線化 (`mesh.Curve(order)`) には、
+[SetGeomInfo API](https://github.com/NGSolve/netgen/pull/232) が必要。
+公式 netgen にまだマージされていないため、パッチ適用版を使用する:
+
+```bash
+# Step 1: 公式 ngsolve をインストール (netgen-mesher + mkl 含む)
+pip install ngsolve
+
+# Step 2: SetGeomInfo パッチ適用版 netgen で上書き
+pip install netgen-mesher --force-reinstall \
+  --find-links https://github.com/ksugahar/netgen/releases/latest
+
+# Step 3: sparsesolv-ngsolve をインストール
+pip install sparsesolv-ngsolve
+```
+
+> **Note**: SetGeomInfo が不要な場合 (Netgen自身でメッシュ生成する場合) は
+> `pip install sparsesolv-ngsolve` だけで十分。
+> PR#232 が公式 netgen にマージされれば Step 2 は不要になる。
 
 ### 動作確認
 
