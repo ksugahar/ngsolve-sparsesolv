@@ -71,7 +71,7 @@ jobs:
               freedofs=fes2.FreeDofs(),
               coord_x=cx, coord_y=cy, coord_z=cz,
               cycle_type=1, print_level=0)
-          inv = CGSolver(a2.mat, pre, tol=1e-10, maxsteps=500, freedofs=fes2.FreeDofs())
+          inv = CGSolver(a2.mat, pre, precision=1e-10, maxsteps=500)
           gfu2.vec.data = inv * f2.vec
           t_ams = time.perf_counter() - t0
           ams_iters = inv.GetSteps()
