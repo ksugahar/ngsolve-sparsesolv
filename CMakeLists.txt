@@ -94,14 +94,6 @@ if paths: print(paths[0])
     target_compile_features(sparsesolv_ngsolve PRIVATE cxx_std_17)
     if(MSVC)
         target_compile_options(sparsesolv_ngsolve PRIVATE /arch:AVX2)
-        # Allow unresolved DifferentialOperator SIMD vtable entries.
-        # These base-class virtual methods (CalcMatrix/Apply/AddTrans for
-        # SIMD types) may not be exported from libngsolve.dll when built
-        # via scikit-build. They just throw ExceptionNOSIMD and are never
-        # called at runtime (derived classes override them with real SIMD
-        # implementations that ARE exported). The vtable entries become
-        # null pointers which is safe as long as they're never called.
-        target_link_options(sparsesolv_ngsolve PRIVATE /FORCE:UNRESOLVED)
     else()
         target_compile_options(sparsesolv_ngsolve PRIVATE -mavx2 -mfma)
     endif()
@@ -120,7 +112,7 @@ if paths: print(paths[0])
             LIBRARY DESTINATION sparsesolv_ngsolve
             RUNTIME DESTINATION sparsesolv_ngsolve)
         file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/__init__.py"
-             "from .sparsesolv_ngsolve import *\n")
+             "import ngsolve  # ensure DLL paths are set up\nfrom .sparsesolv_ngsolve import *\n")
         install(FILES "${CMAKE_CURRENT_BINARY_DIR}/__init__.py"
                 DESTINATION sparsesolv_ngsolve)
         install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/sparsesolv_ngsolve.pyi"

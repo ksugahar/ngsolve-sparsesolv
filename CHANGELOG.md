@@ -5,6 +5,25 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-03-14
+
+### Changed
+- **Standalone wheel**: No longer bundles netgen/ngsolve. Depends on official PyPI `ngsolve>=6.2.2601`
+  - Official ngsolve already includes MKL + PARDISO + Periodic BC fix
+  - Package name reverted to `sparsesolv-ngsolve` (standalone add-on, not monolithic)
+- Removed `/FORCE:UNRESOLVED` linker flag from CMakeLists.txt (no longer needed with official ngsolve)
+- Fixed `__init__.py` to import ngsolve before loading the .pyd (ensures DLL paths are set up)
+
+### Removed
+- `scripts/build_monolithic.py` — Monolithic wheel builder (no longer needed)
+- `patches/` directory — SetGeomInfo patch maintained separately in ksugahar/netgen fork
+- `NGSOLVE_VERSION` file — No longer tracking upstream version (using PyPI dependency)
+
+## [3.0.0] - 2026-03-13 (WITHDRAWN)
+
+Attempted monolithic bundling of netgen + ngsolve + sparsesolv. Withdrawn due to
+Windows DLL export limitations (65535 symbol limit, SIMD vtable unresolved symbols).
+
 ## [2.7.0] - 2026-03-10
 
 ### Removed

@@ -2,48 +2,50 @@
 
 ## Architecture
 
-This repository provides a monolithic PyPI package `ngsolve-sparsesolv` that bundles:
-1. **NGSolve** -- Official NGSolve (tracked via NGSOLVE_VERSION)
-2. **Netgen** -- Official Netgen with SetGeomInfo patch (until PR#86 is merged upstream)
-3. **SparseSolv** -- Compact AMS, COCR, IC, SGS solvers (this repo's original code)
+This repository provides `sparsesolv-ngsolve`, a **standalone** PyPI package
+that adds Compact AMS/COCR solvers to the official NGSolve.
 
-### No Forks
+**No forks, no monolithic bundling.** Users install official ngsolve from PyPI
+and sparsesolv-ngsolve on top of it:
 
-This project does NOT maintain forks of NGSolve or Netgen.
-- Official NGSolve is cloned at build time from https://github.com/NGSolve/ngsolve
-- `NGSOLVE_VERSION` file pins the upstream version tag
-- `patches/` directory contains minimal patches applied at build time
-- When upstream adopts our patches (e.g., PR#86 for SetGeomInfo), the patch file is deleted
-
-### Upstream Sync
-
-To update to a new NGSolve release:
-1. Update `NGSOLVE_VERSION` to the new tag (e.g., `v6.2.2602`)
-2. Verify patches apply cleanly: `python scripts/build_monolithic.py`
-3. If a patch fails, update the patch to match upstream changes
-4. Run tests, tag, push
-
-### SparseSolv Independent Build
-
-SparseSolv can be built independently against any installed NGSolve:
 ```bash
-pip install ngsolve
-pip install .  # builds sparsesolv_ngsolve module only
+pip install sparsesolv-ngsolve   # pulls ngsolve>=6.2.2601 automatically
 ```
 
-For the monolithic wheel (netgen + ngsolve + sparsesolv):
-```bash
-python scripts/build_monolithic.py
-pip install dist/ngsolve_sparsesolv-*.whl
-```
+### Why Standalone (Not Monolithic)
+
+As of v6.2.2601, official PyPI ngsolve already includes:
+- **Intel MKL** (`Requires-Dist: mkl`, `USE_MKL=ON`)
+- **PARDISO** direct solver (via MKL, `USE_PARDISO` in compile definitions)
+- **Periodic BC fix** (Identify() survives Glue(), fixed in 6.2.2601)
+
+The only remaining add-on value of this package:
+1. **Compact AMS** -- Hiptmair-Xu auxiliary-space Maxwell preconditioner (HYPRE-free)
+2. **COCR** -- Complex symmetric Krylov solver (Sogabe-Zhang 2007)
+3. **ICCG** -- IC(0) with auto-shift for curl-curl + ABMC parallel triangular solve
+4. **SGS-MRTR** -- Symmetric Gauss-Seidel MRTR
+
+### SetGeomInfo Patch (Separate)
+
+The SetGeomInfo API patch (netgen PR#232) is **no longer part of this package**.
+It is maintained separately in the ksugahar/netgen fork until upstream adoption.
+- PR: https://github.com/NGSolve/netgen/pull/232
+- For users who need SetGeomInfo: install the patched netgen from the fork
 
 ## Build
 
 - **Compiler**: MSVC (Visual Studio 2022)
-- **BLAS/LAPACK**: Intel MKL (OpenBLAS NOT supported)
+- **BLAS/LAPACK**: Intel MKL (via pip `mkl-devel` at build time, `mkl` at runtime)
 - **Platform**: Windows only (current)
 - **Python**: 3.10+
 - **Parallelization**: NGSolve TaskManager (not raw OpenMP)
+
+### Build from source
+
+```bash
+pip install ngsolve mkl-devel pybind11 scikit-build-core
+pip install .
+```
 
 ### MKL DLL Policy
 
@@ -55,47 +57,29 @@ intel-cmplr-lib-rt
 
 ## PyPI
 
-- **Package name**: `ngsolve-sparsesolv`
-- **Contents**: netgen + ngsolve + sparsesolv_ngsolve (single wheel)
+- **Package name**: `sparsesolv-ngsolve`
+- **Dependencies**: `ngsolve>=6.2.2601`, `mkl>=2024.2.0`, `intel-cmplr-lib-rt`, `numpy`
 - **Publishing**: Automated via GitHub Actions + OIDC Trusted Publishers
 - **Trigger**: Push a version tag `v*`
-
-### Deprecated Package
-
-The old `sparsesolv-ngsolve` PyPI package is deprecated.
-Users should migrate to `pip install ngsolve-sparsesolv`.
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `NGSOLVE_VERSION` | Pinned upstream NGSolve version tag |
-| `patches/*.patch` | Patches applied to official ngsolve/netgen at build time |
-| `scripts/build_monolithic.py` | Monolithic wheel build orchestrator |
 | `include/sparsesolv/` | SparseSolv header-only library (C++17) |
 | `ngsolve/python_module.cpp` | SparseSolv pybind11 entry point |
-| `pyproject.toml` | Standalone SparseSolv build config |
-| `.github/workflows/build-wheels.yml` | Monolithic wheel CI + PyPI publish |
-| `.github/workflows/ci.yml` | Standalone SparseSolv CI test |
+| `pyproject.toml` | Build config (scikit-build-core) |
+| `.github/workflows/build-wheels.yml` | Wheel build CI + PyPI publish |
+| `.github/workflows/ci.yml` | Build + test CI |
 
 ## Solver Selection Guide
 
 | Problem | FEM Space | Recommended Solver |
 |---------|-----------|-------------------|
 | Poisson | H1 | ICCG |
-| Curl-curl (real) | HCurl | Shifted-ICCG |
+| Curl-curl (real) | HCurl (`nograds=True`) | Shifted-ICCG |
 | Magnetostatic (large) | HCurl real | Compact AMS + CG |
 | Eddy current (large) | HCurl complex | Compact AMS + COCR |
-
-## SetGeomInfo Patch
-
-The SetGeomInfo API adds `Element2d.SetGeomInfo(vertex_index, u, v)` to Netgen,
-enabling high-order mesh curving for externally imported meshes (from Cubit, GMSH).
-
-- **PR**: https://github.com/NGSolve/netgen/pull/232
-- **Patch**: `patches/netgen-setgeominfo.patch`
-- **Status**: Pending upstream adoption
-- **When merged**: Delete the patch file, update this section
 
 ## Console Encoding
 
