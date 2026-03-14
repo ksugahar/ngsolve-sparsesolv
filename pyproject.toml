@@ -3,7 +3,7 @@ requires = ["scikit-build-core>=0.10", "pybind11", "ngsolve>=6.2.2601", "mkl-dev
 build-backend = "scikit_build_core.build"
 
 [project]
-name = "sparsesolv-ngsolve"
+name = "ngsolve-sparsesolv"
 version = "3.1.0"
 description = "Compact AMS/COCR solvers for NGSolve HCurl problems"
 readme = "README.md"

@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Standalone wheel**: No longer bundles netgen/ngsolve. Depends on official PyPI `ngsolve>=6.2.2601`
   - Official ngsolve already includes MKL + PARDISO + Periodic BC fix
-  - Package name reverted to `sparsesolv-ngsolve` (standalone add-on, not monolithic)
+  - Package name reverted to `ngsolve-sparsesolv` (standalone add-on, not monolithic)
 - Removed `/FORCE:UNRESOLVED` linker flag from CMakeLists.txt (no longer needed with official ngsolve)
 - Fixed `__init__.py` to import ngsolve before loading the .pyd (ensures DLL paths are set up)
 

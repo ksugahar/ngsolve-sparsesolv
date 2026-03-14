@@ -1,7 +1,7 @@
-# sparsesolv-ngsolve — Compact AMS/COCR Solvers for NGSolve
+# ngsolve-sparsesolv — Compact AMS/COCR Solvers for NGSolve
 
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
-[![PyPI](https://img.shields.io/pypi/v/sparsesolv-ngsolve)](https://pypi.org/project/sparsesolv-ngsolve/)
+[![PyPI](https://img.shields.io/pypi/v/ngsolve-sparsesolv)](https://pypi.org/project/ngsolve-sparsesolv/)
 
 **渦電流問題でICCGの60倍少ない反復回数。**
 
@@ -20,7 +20,7 @@ SparseSolvは [JP-MARs/SparseSolv](https://github.com/JP-MARs/SparseSolv) から
 ### 基本インストール
 
 ```bash
-pip install sparsesolv-ngsolve
+pip install ngsolve-sparsesolv
 ```
 
 これで公式ngsolve (MKL + PARDISO付き) と sparsesolv_ngsolve が自動的にインストールされる。
@@ -39,12 +39,12 @@ pip install ngsolve
 pip install netgen-mesher --force-reinstall \
   --find-links https://github.com/ksugahar/netgen/releases/latest
 
-# Step 3: sparsesolv-ngsolve をインストール
-pip install sparsesolv-ngsolve
+# Step 3: ngsolve-sparsesolv をインストール
+pip install ngsolve-sparsesolv
 ```
 
 > **Note**: SetGeomInfo が不要な場合 (Netgen自身でメッシュ生成する場合) は
-> `pip install sparsesolv-ngsolve` だけで十分。
+> `pip install ngsolve-sparsesolv` だけで十分。
 > PR#232 が公式 netgen にマージされれば Step 2 は不要になる。
 
 ### 動作確認

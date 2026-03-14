@@ -2,14 +2,14 @@
 
 ## Architecture
 
-This repository provides `sparsesolv-ngsolve`, a **standalone** PyPI package
+This repository provides `ngsolve-sparsesolv`, a **standalone** PyPI package
 that adds Compact AMS/COCR solvers to the official NGSolve.
 
 **No forks, no monolithic bundling.** Users install official ngsolve from PyPI
-and sparsesolv-ngsolve on top of it:
+and ngsolve-sparsesolv on top of it:
 
 ```bash
-pip install sparsesolv-ngsolve   # pulls ngsolve>=6.2.2601 automatically
+pip install ngsolve-sparsesolv   # pulls ngsolve>=6.2.2601 automatically
 ```
 
 ### Why Standalone (Not Monolithic)
@@ -57,7 +57,7 @@ intel-cmplr-lib-rt
 
 ## PyPI
 
-- **Package name**: `sparsesolv-ngsolve`
+- **Package name**: `ngsolve-sparsesolv`
 - **Dependencies**: `ngsolve>=6.2.2601`, `mkl>=2024.2.0`, `intel-cmplr-lib-rt`, `numpy`
 - **Publishing**: Automated via GitHub Actions + OIDC Trusted Publishers
 - **Trigger**: Push a version tag `v*`
