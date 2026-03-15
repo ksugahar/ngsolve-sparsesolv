@@ -335,6 +335,10 @@ Properties (set after construction):
 
 inline void ExportCompactAMS(py::module& m) {
 
+  // Type registration for CompactAMG (needed for correct virtual dispatch in Python)
+  py::class_<CompactAMG, shared_ptr<CompactAMG>, BaseMatrix>
+      (m, "CompactAMGPreconditionerImpl");
+
   // Type registrations for CompactAMS / ComplexCompactAMS (enables Update() from Python)
   py::class_<CompactAMS, shared_ptr<CompactAMS>, BaseMatrix>
       (m, "CompactAMSPreconditionerImpl")
@@ -359,7 +363,7 @@ inline void ExportCompactAMS(py::module& m) {
        int max_levels,
        int min_coarse,
        int num_smooth,
-       int print_level) -> shared_ptr<BaseMatrix>
+       int print_level) -> shared_ptr<CompactAMG>
     {
       auto sp_mat = dynamic_pointer_cast<SparseMatrix<double>>(mat);
       if (!sp_mat)
